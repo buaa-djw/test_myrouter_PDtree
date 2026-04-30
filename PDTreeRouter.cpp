@@ -1376,6 +1376,13 @@ bool PDTreeRouter::build2DManhattanConnection(const RoutedPoint& a,
     out_segments.clear();
     const DieId die_a = normalizeDie(a.die);
     const DieId die_b = normalizeDie(b.die);
+    // Hard guard: ordinary 2D wires cannot be created with unknown die.
+    if (die_a == DieId::kUnknown || die_b == DieId::kUnknown) {
+        if (params_.verbose) {
+            std::cerr << "[PDTreeRouter][ERROR] build2DManhattanConnection unknown die rejected\n";
+        }
+        return false;
+    }
 
     // Non-HBT wire segments must stay on the same die.
     if (die_a != die_b) {
@@ -1650,6 +1657,10 @@ RoutedPoint PDTreeRouter::pinToPoint(const Pin& pin) const
     p.x = clampInt(pin.x, db_.die_lx, db_.die_ux);
     p.y = clampInt(pin.y, db_.die_ly, db_.die_uy);
     p.die = pin.die;
+    if (p.die == DieId::kUnknown && params_.verbose) {
+        std::cerr << "[PDTreeRouter][ERROR] pinToPoint sees unknown die pin="
+                  << pin.name << " node=" << pin.node_name << std::endl;
+    }
     return p;
 }
 
@@ -1706,6 +1717,10 @@ RouteValidationResult PDTreeRouter::validateRouteResultTopology(const NetRouteRe
     auto key=[](const RoutedPoint& p){ return (static_cast<long long>(p.x)<<32) ^ (static_cast<long long>(p.y)<<8) ^ static_cast<int>(normalizeDie(p.die)); };
 
     for (const auto& seg : result.segments) {
+        if (normalizeDie(seg.p1.die) == DieId::kUnknown || normalizeDie(seg.p2.die) == DieId::kUnknown) {
+            vr.errors.push_back("unknown_die_in_segment");
+            vr.valid = false;
+        }
         if (!seg.uses_hbt && normalizeDie(seg.p1.die) != normalizeDie(seg.p2.die)) {
             vr.non_hbt_cross_die_segments++;
             vr.errors.push_back("non_hbt_cross_die_segment");
@@ -1731,6 +1746,16 @@ RouteValidationResult PDTreeRouter::validateRouteResultTopology(const NetRouteRe
         if (!matched || n.point.x != slot.x || n.point.y != slot.y || !n.hbt_assigned) {
             vr.hbt_node_segment_mismatches++;
             vr.errors.push_back("hbt_node_segment_mismatch");
+        }
+    }
+    for (size_t i = 0; i < result.tree_nodes.size(); ++i) {
+        const int pidx = result.tree_nodes[i].parent_index;
+        if (i == static_cast<size_t>(result.root_tree_index)) {
+            continue;
+        }
+        if (pidx < 0 || pidx >= static_cast<int>(result.tree_nodes.size())) {
+            vr.errors.push_back("invalid_parent_index");
+            vr.valid = false;
         }
     }
     if (vr.non_hbt_cross_die_segments || vr.invalid_hbt_segments || vr.hbt_node_segment_mismatches) {

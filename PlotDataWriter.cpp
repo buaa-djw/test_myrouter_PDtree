@@ -26,6 +26,10 @@ void write3DNetPlotData(const std::string& dir, const NetRouteResult& r)
     std::filesystem::create_directories(dir);
     json j;
     j["net_name"] = r.net_name;
+    j["is_3d"] = r.is_3d;
+    j["success"] = r.success;
+    j["status"] = r.status;
+    j["fail_reason"] = r.fail_reason;
     j["validation"] = {
         {"valid", r.validation.valid},
         {"errors", r.validation.errors},

@@ -1454,26 +1454,56 @@ DieId RouterDB::inferNetDominantDieFor2D(const Net& net) const
 
 void RouterDB::finalizeNetPinDies(Net& net) const
 {
-    // OpenDB BTerm/PORT pins often do not carry explicit die ownership.
-    // For 2D nets (single-die nets), Unknown pins can safely inherit that
-    // unique die. For true 3D nets, we must keep Unknown unchanged.
-    if (net.is_3d) {
-        return;
-    }
+    // Unknown die must never leak into routing topology. We resolve all pins,
+    // including 3D/mixed nets, using instance die + access-layer heuristics.
+    auto inferFromLayer = [](const std::string& layer_name) {
+        if (layer_name.empty()) {
+            return DieId::kUnknown;
+        }
+        if (containsInsensitive(layer_name, "_M")
+            || containsInsensitive(layer_name, "BOTTOM")
+            || containsInsensitive(layer_name, "LOWER")) {
+            return DieId::kBottom;
+        }
+        if (layer_name.size() >= 2
+            && (layer_name[0] == 'M' || layer_name[0] == 'm')
+            && std::isdigit(static_cast<unsigned char>(layer_name[1])) != 0) {
+            return DieId::kTop;
+        }
+        return DieId::kUnknown;
+    };
 
-    const DieId dominant_die = inferNetDominantDieFor2D(net);
-    if (dominant_die == DieId::kUnknown) {
-        return;
+    int top_known = 0;
+    int bottom_known = 0;
+    for (const auto& pin : net.pins) {
+        if (pin.die == DieId::kTop) {
+            ++top_known;
+        } else if (pin.die == DieId::kBottom) {
+            ++bottom_known;
+        }
     }
+    const DieId majority_die = (top_known >= bottom_known) ? DieId::kTop : DieId::kBottom;
 
     for (auto& pin : net.pins) {
         if (pin.die != DieId::kUnknown) {
             continue;
         }
-        pin.die = dominant_die;
-        std::cout << "[RouterDB] finalize 2D net pin die net=" << net.name
+        DieId inferred = DieId::kUnknown;
+        if (pin.node_id >= 0 && pin.node_id < static_cast<int>(nodes.size())) {
+            inferred = nodes[pin.node_id].die;
+        }
+        if (inferred == DieId::kUnknown) {
+            inferred = inferFromLayer(pin.access_layer);
+        }
+        if (inferred == DieId::kUnknown) {
+            inferred = majority_die;
+            std::cerr << "[RouterDB] warning: fallback infer die by majority net=" << net.name
+                      << " pin=" << pin.name << "\n";
+        }
+        pin.die = inferred;
+        std::cout << "[RouterDB] finalize pin die net=" << net.name
                   << " pin=" << pin.name
-                  << " Unknown->" << dieToString(dominant_die) << std::endl;
+                  << " Unknown->" << dieToString(inferred) << std::endl;
     }
 }
 

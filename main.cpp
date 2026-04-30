@@ -274,7 +274,12 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------
     if (cfg.debug.dump_plot_data) {
         for (const auto& result : results) {
-            if (result.success && result.is_3d) {
+            if (!result.is_3d) {
+                continue;
+            }
+            // Debug purpose: dump invalid 3D nets as well so we can inspect
+            // topology failures (e.g., HBT node/segment mismatch) in JSON/PNG.
+            if (result.success || cfg.output.dump_invalid_3d_nets) {
                 write3DNetPlotData(plot_data_dir.string(), result);
             }
         }
