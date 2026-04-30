@@ -35,6 +35,10 @@ void writeNetInfo(const std::string& path, const RouterDB&, const std::vector<Ne
           << " invalid_hbt_segments=" << r.validation.invalid_hbt_segments
           << " disconnected_components=" << r.validation.disconnected_components
           << " hbt_node_segment_mismatches=" << r.validation.hbt_node_segment_mismatches << "\n";
+        o << "  validation_errors:\n";
+        for (const auto& e : r.validation.errors) {
+            o << "    - " << e << "\n";
+        }
         o << "  tree_nodes:\n";
         for (size_t i = 0; i < r.tree_nodes.size(); ++i) {
             const auto& n = r.tree_nodes[i];
@@ -51,6 +55,33 @@ void writeNetInfo(const std::string& path, const RouterDB&, const std::vector<Ne
             o << "      assigned_hbt_id: " << n.assigned_hbt_id << " hbt_assigned: " << n.hbt_assigned << "\n";
             o << "      hbt_from_die: " << static_cast<int>(n.hbt_from_die) << " hbt_to_die: " << static_cast<int>(n.hbt_to_die) << "\n";
             o << "      incoming_segment_begin: " << n.incoming_segment_begin << " incoming_segment_count: " << n.incoming_segment_count << "\n";
+            if (n.node_type == TreeNodeState::NodeType::kHBT) {
+                int matched_segment_index = -1;
+                for (size_t si = 0; si < r.segments.size(); ++si) {
+                    const auto& seg = r.segments[si];
+                    if (seg.uses_hbt && seg.hbt_id == n.assigned_hbt_id) {
+                        matched_segment_index = static_cast<int>(si);
+                        break;
+                    }
+                }
+                o << "      hbt_match:\n";
+                o << "        matched_segment_index: " << matched_segment_index << "\n";
+                o << "        node_xy: (" << n.point.x << "," << n.point.y << ")\n";
+                if (matched_segment_index >= 0) {
+                    const auto& ms = r.segments[matched_segment_index];
+                    o << "        segment_xy: (" << ms.p1.x << "," << ms.p1.y << ")\n";
+                    o << "        node_hbt_id: " << n.assigned_hbt_id << "\n";
+                    o << "        segment_hbt_id: " << ms.hbt_id << "\n";
+                    o << "        match_result: "
+                      << ((ms.p1.x == n.point.x && ms.p1.y == n.point.y) ? "OK" : "MISMATCH")
+                      << "\n";
+                } else {
+                    o << "        segment_xy: N/A\n";
+                    o << "        node_hbt_id: " << n.assigned_hbt_id << "\n";
+                    o << "        segment_hbt_id: N/A\n";
+                    o << "        match_result: NO_SEGMENT\n";
+                }
+            }
         }
         o << "  segments:\n";
         for (size_t i = 0; i < r.segments.size(); ++i) {
