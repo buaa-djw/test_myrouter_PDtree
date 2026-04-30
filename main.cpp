@@ -6,22 +6,328 @@
 #include "Parser.h"
 #include "PDTreeRouter.h"
 #include "PlotDataWriter.h"
-#include <chrono>
-#include <filesystem>
-#include <iostream>
-#include <cstdlib>
 
-int main(int argc,char**argv){std::string cfg_path; for(int i=1;i<argc;++i){std::string a=argv[i]; if(a=="--config"&&i+1<argc) cfg_path=argv[++i];}
- if(cfg_path.empty()){std::cerr<<"Usage: pdtree_experiment --config <json>\n"; return 1;}
- auto t0=std::chrono::steady_clock::now(); ExperimentConfig cfg; std::string err; if(!ExperimentConfig::loadFromFile(cfg_path,cfg,err)){std::cerr<<err<<"\n"; return 2;} if(!cfg.validate(err)){std::cerr<<err<<"\n"; return 3;} std::cout<<"Effective config:\n"<<cfg.dumpJsonString()<<"\n";
- Parser p; if(!p.readDesign(cfg.input)){std::cerr<<"readDesign failed\n"; return 4;} RouterDB db; if(!p.buildRouteDB(db)){std::cerr<<"buildRouteDB failed\n"; return 5;}
- db.hbt.has_parasitic=true; db.hbt.parasitic_res=cfg.rc.hbt_res*cfg.rc.hbt_rc_scale; db.hbt.parasitic_cap=cfg.rc.hbt_cap*cfg.rc.hbt_rc_scale;
- HybridGrid grid; GridBuildOptions opt; opt.hbt_res=db.hbt.parasitic_res; opt.hbt_cap=db.hbt.parasitic_cap; opt.top_unit_res=db.computeEffectiveTopUnitRes()*cfg.rc.wire_r_scale; opt.top_unit_cap=db.computeEffectiveTopUnitCap()*cfg.rc.wire_c_scale; opt.bottom_unit_res=db.computeEffectiveBottomUnitRes()*cfg.rc.wire_r_scale; opt.bottom_unit_cap=db.computeEffectiveBottomUnitCap()*cfg.rc.wire_c_scale; if(!grid.build(db,opt)){std::cerr<<"grid build failed\n"; return 6;}
- PDTreeRouter router(db,grid,cfg.buildRouterParams()); auto results=router.routeSignalNets(cfg.pd_tree.max_nets,nullptr);
- EDCompute ed(db, EDCompute::Params{cfg.rc.default_sink_cap,cfg.rc.source_res,cfg.rc.hbt_res*cfg.rc.hbt_rc_scale,cfg.rc.hbt_cap*cfg.rc.hbt_rc_scale,false});
- for(size_t i=0;i<results.size();++i){auto& r=results[i]; const Net& n=db.nets[i]; if(r.success) ed.annotateNetDelay(n,r);} std::filesystem::create_directories(cfg.output.output_dir); std::string plot_data=cfg.output.output_dir+"/"+cfg.output.plot_data_dir; std::filesystem::create_directories(plot_data); std::filesystem::create_directories(cfg.output.output_dir+"/"+cfg.output.plot_dir);
- for(auto&r:results) if(r.success && r.is_3d && cfg.debug.dump_plot_data) write3DNetPlotData(plot_data,r);
- writeNetInfo(cfg.output.output_dir+"/"+cfg.output.net_info,db,results);
- auto t1=std::chrono::steady_clock::now(); double sec=std::chrono::duration<double>(t1-t0).count(); writeExperimentSummary(cfg.output.output_dir+"/"+cfg.output.summary_report,cfg,db,results,"start","end",sec);
- if(cfg.output.enable_plot_generation){std::string cmd="python3 scripts/plot_3d_nets.py --root "+cfg.output.output_dir; std::system(cmd.c_str());}
- return 0; }
+#include <chrono>
+#include <cstdlib>
+#include <ctime>
+#include <filesystem>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+void printUsage(const char* exe)
+{
+    std::cerr << "Usage: " << exe << " --config <json>\n";
+}
+
+std::string nowString()
+{
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+
+    std::tm tm_buf {};
+#if defined(_WIN32)
+    localtime_s(&tm_buf, &t);
+#else
+    localtime_r(&t, &tm_buf);
+#endif
+
+    std::ostringstream os;
+    os << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S");
+    return os.str();
+}
+
+const Net* findNetByName(const RouterDB& db, const std::string& net_name)
+{
+    for (const auto& net : db.nets) {
+        if (net.name == net_name) {
+            return &net;
+        }
+    }
+    return nullptr;
+}
+
+std::string shellQuote(const std::string& s)
+{
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
+    }
+    out += "'";
+    return out;
+}
+
+fs::path findPlotScript(const std::string& cfg_path, const std::string& argv0)
+{
+    std::vector<fs::path> candidates;
+
+    // Case 1: run from src/test_myrouter_PDtree
+    candidates.emplace_back(fs::current_path() / "scripts" / "plot_3d_nets.py");
+
+    // Case 2: run from OpenROAD root
+    candidates.emplace_back(fs::current_path() / "src" / "test_myrouter_PDtree" / "scripts" / "plot_3d_nets.py");
+
+    // Case 3: derive module root from config path: <module>/configs/*.json
+    if (!cfg_path.empty()) {
+        fs::path cfg_abs = fs::absolute(cfg_path);
+        if (cfg_abs.has_parent_path()) {
+            fs::path config_dir = cfg_abs.parent_path();
+            fs::path module_dir = config_dir.parent_path();
+            candidates.emplace_back(module_dir / "scripts" / "plot_3d_nets.py");
+        }
+    }
+
+    // Case 4: derive from executable path
+    if (!argv0.empty()) {
+        fs::path exe_path = fs::absolute(argv0);
+        if (exe_path.has_parent_path()) {
+            candidates.emplace_back(exe_path.parent_path() / "scripts" / "plot_3d_nets.py");
+        }
+    }
+
+    for (const auto& p : candidates) {
+        if (fs::exists(p)) {
+            return p;
+        }
+    }
+
+    return {};
+}
+
+}  // namespace
+
+int main(int argc, char** argv)
+{
+    std::string cfg_path;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+
+        if (arg == "--config" && i + 1 < argc) {
+            cfg_path = argv[++i];
+        } else if (arg == "-h" || arg == "--help") {
+            printUsage(argv[0]);
+            return 0;
+        }
+    }
+
+    if (cfg_path.empty()) {
+        printUsage(argv[0]);
+        return 1;
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::string start_ts = nowString();
+
+    ExperimentConfig cfg;
+    std::string err;
+
+    if (!ExperimentConfig::loadFromFile(cfg_path, cfg, err)) {
+        std::cerr << "[main] failed to load config: " << err << "\n";
+        return 2;
+    }
+
+    if (!cfg.validate(err)) {
+        std::cerr << "[main] invalid config: " << err << "\n";
+        return 3;
+    }
+
+    std::cout << "========== Effective Config ==========\n";
+    std::cout << cfg.dumpJsonString() << "\n";
+    std::cout << "======================================\n";
+
+    // ------------------------------------------------------------
+    // 1. Read LEF/DEF through OpenDB-based Parser
+    // ------------------------------------------------------------
+    Parser parser;
+
+    if (!parser.init()) {
+        std::cerr << "[main] Parser::init() failed.\n";
+        return 4;
+    }
+
+    if (!parser.readDesign(cfg.input)) {
+        std::cerr << "[main] Parser::readDesign() failed.\n";
+        return 5;
+    }
+
+    RouterDB db;
+    if (!parser.buildRouteDB(db)) {
+        std::cerr << "[main] Parser::buildRouteDB() failed.\n";
+        return 6;
+    }
+
+    // ------------------------------------------------------------
+    // 2. Override HBT RC from experiment config
+    // ------------------------------------------------------------
+    const double scaled_hbt_res = cfg.rc.hbt_res * cfg.rc.hbt_rc_scale;
+    const double scaled_hbt_cap = cfg.rc.hbt_cap * cfg.rc.hbt_rc_scale;
+
+    db.hbt.has_parasitic = true;
+    db.hbt.parasitic_res = scaled_hbt_res;
+    db.hbt.parasitic_cap = scaled_hbt_cap;
+
+    std::cout << "[main] HBT RC override: R=" << scaled_hbt_res
+              << " C=" << scaled_hbt_cap
+              << " scale=" << cfg.rc.hbt_rc_scale << "\n";
+
+    // ------------------------------------------------------------
+    // 3. Build HybridGrid
+    //
+    // Current HybridGrid interface:
+    //   void build(const RouterDB& db, int hbt_origin_x, int hbt_origin_y)
+    //
+    // Use die lower-left as default HBT grid origin.
+    // ------------------------------------------------------------
+    HybridGrid grid;
+    const int hbt_origin_x = db.die_lx;
+    const int hbt_origin_y = db.die_ly;
+
+    grid.build(db, hbt_origin_x, hbt_origin_y);
+    grid.validate(db);
+
+    std::cout << "[main] HybridGrid built with HBT origin=("
+              << hbt_origin_x << ", " << hbt_origin_y << ")\n";
+
+    // ------------------------------------------------------------
+    // 4. Run PDTreeRouter
+    // ------------------------------------------------------------
+    PDTreeRouter::Params router_params = cfg.buildRouterParams();
+
+    // Ensure scaled HBT RC is definitely passed into router params.
+    router_params.hbt_res = scaled_hbt_res;
+    router_params.hbt_cap = scaled_hbt_cap;
+    router_params.source_res = cfg.rc.source_res;
+    router_params.default_sink_cap = cfg.rc.default_sink_cap;
+
+    PDTreeRouter router(db, grid, router_params);
+
+    PDTreeRouter::RouteRunStats stats;
+    std::vector<NetRouteResult> results = router.routeSignalNets(cfg.pd_tree.max_nets, &stats);
+
+    std::cout << "[main] Routing finished."
+              << " success=" << stats.routed_success
+              << " failed=" << stats.routed_failed
+              << " skipped_clock=" << stats.skipped_clock
+              << " skipped_special=" << stats.skipped_special
+              << "\n";
+
+    // ------------------------------------------------------------
+    // 5. Annotate delay.
+    //
+    // Important:
+    // routeSignalNets() may filter and sort nets, so results[i] does NOT
+    // necessarily correspond to db.nets[i]. We must map by net name.
+    // ------------------------------------------------------------
+    EDCompute ed(
+        db,
+        EDCompute::Params{
+            cfg.rc.default_sink_cap,
+            cfg.rc.source_res,
+            scaled_hbt_res,
+            scaled_hbt_cap,
+            false
+        }
+    );
+
+    for (auto& result : results) {
+        if (!result.success) {
+            continue;
+        }
+
+        const Net* net = findNetByName(db, result.net_name);
+        if (net == nullptr) {
+            std::cerr << "[main] warning: cannot find net for result: "
+                      << result.net_name << "\n";
+            continue;
+        }
+
+        if (!ed.annotateNetDelay(*net, result)) {
+            std::cerr << "[main] warning: EDCompute failed for net: "
+                      << result.net_name << "\n";
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 6. Create output directories
+    // ------------------------------------------------------------
+    const fs::path output_dir = cfg.output.output_dir;
+    const fs::path plot_data_dir = output_dir / cfg.output.plot_data_dir;
+    const fs::path plot_dir = output_dir / cfg.output.plot_dir;
+
+    fs::create_directories(output_dir);
+    fs::create_directories(plot_data_dir);
+    fs::create_directories(plot_dir);
+
+    // ------------------------------------------------------------
+    // 7. Write plot data for 3D nets
+    // ------------------------------------------------------------
+    if (cfg.debug.dump_plot_data) {
+        for (const auto& result : results) {
+            if (result.success && result.is_3d) {
+                write3DNetPlotData(plot_data_dir.string(), result);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 8. Write net info and summary
+    // ------------------------------------------------------------
+    writeNetInfo((output_dir / cfg.output.net_info).string(), db, results);
+
+    const auto t1 = std::chrono::steady_clock::now();
+    const double runtime_sec = std::chrono::duration<double>(t1 - t0).count();
+    const std::string end_ts = nowString();
+
+    writeExperimentSummary(
+        (output_dir / cfg.output.summary_report).string(),
+        cfg,
+        db,
+        results,
+        start_ts,
+        end_ts,
+        runtime_sec
+    );
+
+    std::cout << "[main] Wrote summary: "
+              << (output_dir / cfg.output.summary_report).string() << "\n";
+    std::cout << "[main] Wrote net info: "
+              << (output_dir / cfg.output.net_info).string() << "\n";
+
+    // ------------------------------------------------------------
+    // 9. Generate PNG plots with Python script
+    // ------------------------------------------------------------
+    if (cfg.output.enable_plot_generation) {
+        const fs::path script = findPlotScript(cfg_path, argc > 0 ? argv[0] : "");
+
+        if (script.empty()) {
+            std::cerr << "[main] warning: plot_3d_nets.py not found. "
+                      << "Skip PNG generation.\n";
+        } else {
+            const std::string cmd =
+                "python3 " + shellQuote(script.string())
+                + " --root " + shellQuote(output_dir.string());
+
+            std::cout << "[main] Running plot command: " << cmd << "\n";
+
+            const int rc = std::system(cmd.c_str());
+            if (rc != 0) {
+                std::cerr << "[main] warning: plot script returned non-zero code: "
+                          << rc << "\n";
+            }
+        }
+    }
+
+    std::cout << "[main] Done. Runtime = " << runtime_sec << " sec\n";
+    return 0;
+}

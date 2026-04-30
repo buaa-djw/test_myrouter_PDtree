@@ -1,1 +1,11 @@
-{"experiment_name":"gcd_baseline","benchmark":"gcd","cost_mode":"baseline","input":{"common_lef":"test/asap7_nangate45_2A6M10M.lef","hbt_lef":"test/asap7_nangate45_10M10M.hbPitch_0p2.lef","upper_lef":"test/asap7sc7p5t_28_R_1x_220121a.upper.processed.lef","bottom_lef":"test/NangateOpenCellLibrary.macro.mod.bottom.processed.lef","def_file":"test/gcd.def","extra_lefs":[]},"output":{"output_dir":"results/gcd_baseline"}}
+{"experiment_name":"gcd_baseline","benchmark":"gcd","cost_mode":"baseline",
+"input": {
+  "common_lef": "/home/djw/Desktop/TaiWei/ORFS-Research/tools/OpenROAD/src/test_myrouter_PDtree/test/asap7_nangate45_2A6M10M.lef",
+  "hbt_lef": "/home/djw/Desktop/TaiWei/ORFS-Research/tools/OpenROAD/src/test_myrouter_PDtree/test/asap7_nangate45_10M10M.hbPitch_0p2.lef",
+  "upper_lef": "/home/djw/Desktop/TaiWei/ORFS-Research/tools/OpenROAD/src/test_myrouter_PDtree/test/asap7sc7p5t_28_R_1x_220121a.upper.processed.lef",
+  "bottom_lef": "/home/djw/Desktop/TaiWei/ORFS-Research/tools/OpenROAD/src/test_myrouter_PDtree/test/NangateOpenCellLibrary.macro.mod.bottom.processed.lef",
+  "def_file": "/home/djw/Desktop/TaiWei/ORFS-Research/tools/OpenROAD/src/test_myrouter_PDtree/test/gcd1.def",
+  "extra_lefs": []
+},
+"output":{"output_dir":"results/gcd_baseline"}
+}
