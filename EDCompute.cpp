@@ -31,7 +31,8 @@ bool EDCompute::annotateNetDelay(const Net& net, NetRouteResult& result) const
     // This keeps global-routing estimation stable before detailed extraction.
     result.delay_summary = NetDelaySummary{};
 
-    if (!result.success) {
+    // Invalid topology must not produce timing-ready delay.
+    if (!result.success || result.status == "invalid_topology") {
         return false;
     }
 
@@ -54,6 +55,16 @@ bool EDCompute::annotateNetDelay(const Net& net, NetRouteResult& result) const
                           << " node=" << i << " parent=" << p << std::endl;
             }
             return false;
+        }
+        if (result.tree_nodes[i].node_type == TreeNodeState::NodeType::kHBT) {
+            if (result.tree_nodes[i].assigned_hbt_id < 0 ||
+                (result.tree_nodes[i].incoming_hbt_count > 0 &&
+                 (result.tree_nodes[i].incoming_hbt_res <= 0.0 || result.tree_nodes[i].incoming_hbt_cap < 0.0))) {
+                if (params_.verbose) {
+                    std::cerr << "[EDCompute] invalid HBT node for net=" << net.name << " node=" << i << std::endl;
+                }
+                return false;
+            }
         }
         children[p].push_back(i);
     }
