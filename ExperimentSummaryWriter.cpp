@@ -1,3 +1,52 @@
 #include "ExperimentSummaryWriter.h"
+
 #include <fstream>
-void writeExperimentSummary(const std::string& path,const ExperimentConfig& cfg,const RouterDB& db,const std::vector<NetRouteResult>& results,const std::string& st,const std::string& et,double rt){std::ofstream o(path); int routed=0,failed=0,h3d=0; double twl=0,trad=0,avgd=0,maxd=0; for(auto&r:results){if(r.success)routed++; else failed++; if(r.is_3d)h3d++; for(auto&s:r.segments) twl+=abs(s.p1.x-s.p2.x)+abs(s.p1.y-s.p2.y); if(r.delay_summary.ready){avgd+=r.delay_summary.avg_sink_delay; maxd=std::max(maxd,r.delay_summary.max_sink_delay);} } o<<"Experiment Info\nname="<<cfg.experiment_name<<"\nbenchmark="<<cfg.benchmark<<"\ncost_mode="<<cfg.cost_mode<<"\nstart="<<st<<"\nend="<<et<<"\nruntime="<<rt<<"\n\n"; o<<"Config\n"<<cfg.dumpJsonString()<<"\n"; o<<"Overall Metrics\n"<<"total_nets="<<results.size()<<"\nrouted_nets="<<routed<<"\nfailed_nets="<<failed<<"\n3d_nets="<<h3d<<"\ntotal_wirelength="<<twl<<"\navg_sink_delay="<<(results.empty()?0:avgd/results.size())<<"\nmax_sink_delay="<<maxd<<"\n"; o<<"\nPer-net Summary\n"; for(auto&r:results){ o<<r.net_name<<",is3d="<<r.is_3d<<",success="<<r.success<<",wl="; double wl=0; for(auto&s:r.segments) wl+=abs(s.p1.x-s.p2.x)+abs(s.p1.y-s.p2.y); o<<wl<<",hbt="; int hc=0; for(auto&s:r.segments) if(s.uses_hbt) hc++; o<<hc<<",avgd="<<r.delay_summary.avg_sink_delay<<",maxd="<<r.delay_summary.max_sink_delay<<"\n"; }}
+
+void writeExperimentSummary(const std::string& path,
+                            const ExperimentConfig& cfg,
+                            const RouterDB&,
+                            const std::vector<NetRouteResult>& results,
+                            const std::string& st,
+                            const std::string& et,
+                            double rt)
+{
+    std::ofstream o(path);
+    int routed_success = 0;
+    int failed = 0;
+    int invalid_topology_nets = 0;
+    int non_hbt_cross_die_segments = 0;
+    int invalid_hbt_segments = 0;
+    int disconnected_3d_nets = 0;
+    int hbt_node_segment_mismatch_nets = 0;
+
+    for (const auto& r : results) {
+        if (r.success) routed_success++; else failed++;
+        if (r.status == "invalid_topology") invalid_topology_nets++;
+        non_hbt_cross_die_segments += r.validation.non_hbt_cross_die_segments;
+        invalid_hbt_segments += r.validation.invalid_hbt_segments;
+        if (r.validation.disconnected_components > 1) disconnected_3d_nets++;
+        if (r.validation.hbt_node_segment_mismatches > 0) hbt_node_segment_mismatch_nets++;
+    }
+
+    o << "Experiment Info\nname=" << cfg.experiment_name << "\nstart=" << st << "\nend=" << et << "\nruntime=" << rt << "\n\n";
+    o << "Overall Metrics\n";
+    o << "total_nets=" << results.size() << "\n";
+    o << "routed_success=" << routed_success << "\n";
+    o << "failed_nets=" << failed << "\n";
+    o << "invalid_topology_nets=" << invalid_topology_nets << "\n";
+    o << "non_hbt_cross_die_segments=" << non_hbt_cross_die_segments << "\n";
+    o << "invalid_hbt_segments=" << invalid_hbt_segments << "\n";
+    o << "disconnected_3d_nets=" << disconnected_3d_nets << "\n";
+    o << "hbt_node_segment_mismatch_nets=" << hbt_node_segment_mismatch_nets << "\n\n";
+
+    o << "Per-net Summary\n";
+    for (const auto& r : results) {
+        o << "net=" << r.net_name << " status=" << r.status << " route_function_success=" << r.success
+          << " topology_valid=" << r.validation.valid << " delay_ready=" << r.delay_summary.ready
+          << " component_count=" << r.validation.disconnected_components
+          << " non_hbt_cross_die_segments=" << r.validation.non_hbt_cross_die_segments
+          << " invalid_hbt_segments=" << r.validation.invalid_hbt_segments
+          << " hbt_node_segment_mismatches=" << r.validation.hbt_node_segment_mismatches
+          << " validation_errors=" << r.fail_reason << "\n";
+    }
+}

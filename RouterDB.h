@@ -170,7 +170,9 @@ struct Net
     // Only normal signal nets enter current PDTreeRouter flow.
     bool isSignalRoutable() const
     {
-        return net_class != NetClass::kSpecial;
+        return net_class != NetClass::kSpecial
+            && net_class != NetClass::kClock
+            && !is_clock;
     }
 
     // Clock/special nets are intentionally skipped in current signal routing.
