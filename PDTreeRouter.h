@@ -88,11 +88,23 @@ struct NetDelaySummary
     std::vector<SinkDelayInfo> sink_delays;
 };
 
+struct RouteValidationResult
+{
+    bool valid = true;
+    std::vector<std::string> errors;
+    int non_hbt_cross_die_segments = 0;
+    int invalid_hbt_segments = 0;
+    int disconnected_components = 0;
+    int hbt_node_segment_mismatches = 0;
+};
+
 struct NetRouteResult
 {
     std::string net_name;
     bool success = false;
     bool is_3d = false;
+    std::string status = "unrouted";
+    std::string fail_reason;
 
     // Explicitly track which tree_nodes entry is the source/root.
     int root_tree_index = 0;
@@ -102,6 +114,7 @@ struct NetRouteResult
 
     // Per-net delay annotation result (filled by EDCompute).
     NetDelaySummary delay_summary;
+    RouteValidationResult validation;
 };
 
 class PDTreeRouter
@@ -304,6 +317,8 @@ private:
     bool build2DManhattanConnection(const RoutedPoint& a,
                                     const RoutedPoint& b,
                                     std::vector<RoutedSegment>& out_segments) const;
+
+    RouteValidationResult validateRouteResultTopology(const NetRouteResult& result) const;
 
     bool build3DConnectionViaHBT(const RoutedPoint& parent_pt,
                                  const Pin& sink_pin,

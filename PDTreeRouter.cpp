@@ -11,6 +11,7 @@
 #include <queue>
 #include <sstream>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -394,8 +395,23 @@ NetRouteResult PDTreeRouter::route3DNet(const Net& net)
         return empty;
     }
     best.result.success = true;
-    commitNetLevelHBTReservation(best.local_reserved_hbts, net.name);
+    best.result.status = "ok";
+    best.result.validation = validateRouteResultTopology(best.result);
+    if (!best.result.validation.valid) {
+        best.result.success = false;
+        best.result.status = "invalid_topology";
+        for (const auto& err : best.result.validation.errors) {
+            if (!best.result.fail_reason.empty()) {
+                best.result.fail_reason += " | ";
+            }
+            best.result.fail_reason += err;
+        }
+        best.result.delay_summary.ready = false;
+        return best.result;
+    }
+
     (void) annotateDelayPublic(net, best.result);
+    commitNetLevelHBTReservation(best.local_reserved_hbts, net.name);
     return best.result;
 }
 
@@ -1358,7 +1374,17 @@ bool PDTreeRouter::build2DManhattanConnection(const RoutedPoint& a,
                                               std::vector<RoutedSegment>& out_segments) const
 {
     out_segments.clear();
-    if (normalizeDie(a.die) != normalizeDie(b.die)) {
+    const DieId die_a = normalizeDie(a.die);
+    const DieId die_b = normalizeDie(b.die);
+
+    // Non-HBT wire segments must stay on the same die.
+    if (die_a != die_b) {
+        if (params_.verbose) {
+            std::cerr << "[PDTreeRouter][ERROR] build2DManhattanConnection cross-die rejected: "
+                      << "a=(" << a.x << "," << a.y << "," << static_cast<int>(a.die) << "), "
+                      << "b=(" << b.x << "," << b.y << "," << static_cast<int>(b.die) << ")"
+                      << std::endl;
+        }
         return false;
     }
 
@@ -1439,68 +1465,80 @@ bool PDTreeRouter::commit3DBranchWithHBTNode(NetRouteResult& result,
                                              int /*hbt_node_index*/,
                                              const std::vector<RoutedSegment>& seg_parent_to_hbt,
                                              const std::vector<RoutedSegment>& seg_hbt_to_sink,
-                                             const RoutedPoint& hbt_point,
+                                             const RoutedPoint& /*hbt_point*/,
                                              const RoutedPoint& sink_point,
                                              const std::vector<int>& hbt_candidates,
                                              DieId from_die,
                                              DieId to_die,
-int assigned_hbt_id) const
+                                             int assigned_hbt_id) const
 {
-    const double hbt_res_per_crossing = db_.getHBTResistanceOrDefault();
-
     if (parent_tree_index < 0 || parent_tree_index >= static_cast<int>(result.tree_nodes.size())) {
         return false;
     }
+    const auto& slots = grid_.hbt.getSlots();
+    if (assigned_hbt_id < 0 || assigned_hbt_id >= static_cast<int>(slots.size())) {
+        return false;
+    }
+
+    // HBT tree-node is topology/timing object. HBT segment is geometry object.
+    // Both must use the same slot coordinates to keep tree/segments consistent.
+    const auto& slot = slots.at(assigned_hbt_id);
+    RoutedPoint hbt_from{slot.x, slot.y, normalizeDie(from_die)};
+    RoutedPoint hbt_to{slot.x, slot.y, normalizeDie(to_die)};
+    if (normalizeDie(hbt_from.die) == normalizeDie(hbt_to.die)) {
+        return false;
+    }
+
+    std::vector<RoutedSegment> wire_to_hbt = seg_parent_to_hbt;
+    std::vector<RoutedSegment> wire_from_hbt = seg_hbt_to_sink;
+    if (wire_to_hbt.empty() || wire_to_hbt.back().p2.x != slot.x || wire_to_hbt.back().p2.y != slot.y) {
+        wire_to_hbt.clear();
+        if (!build2DManhattanConnection(result.tree_nodes[parent_tree_index].point, hbt_from, wire_to_hbt)) {
+            return false;
+        }
+    }
+    if (wire_from_hbt.empty() || wire_from_hbt.front().p1.x != slot.x || wire_from_hbt.front().p1.y != slot.y) {
+        wire_from_hbt.clear();
+        if (!build2DManhattanConnection(hbt_to, sink_point, wire_from_hbt)) {
+            return false;
+        }
+    }
 
     const int seg_begin_hbt = static_cast<int>(result.segments.size());
-    result.segments.insert(result.segments.end(), seg_parent_to_hbt.begin(), seg_parent_to_hbt.end());
+    result.segments.insert(result.segments.end(), wire_to_hbt.begin(), wire_to_hbt.end());
     RoutedSegment vertical;
-    vertical.p1 = RoutedPoint{hbt_point.x, hbt_point.y, from_die};
-    vertical.p2 = RoutedPoint{hbt_point.x, hbt_point.y, to_die};
+    vertical.p1 = hbt_from;
+    vertical.p2 = hbt_to;
     vertical.uses_hbt = true;
     vertical.hbt_id = assigned_hbt_id;
     result.segments.push_back(vertical);
 
     TreeNodeState hbt_node;
     hbt_node.node_type = TreeNodeState::NodeType::kHBT;
-    hbt_node.pin_index = -1;
-    hbt_node.point = hbt_point;
+    hbt_node.point = hbt_to;
     hbt_node.parent_index = parent_tree_index;
-    hbt_node.hbt_assigned = (assigned_hbt_id >= 0);
     hbt_node.assigned_hbt_id = assigned_hbt_id;
+    hbt_node.hbt_assigned = true;
     hbt_node.candidate_hbt_ids = hbt_candidates;
-    hbt_node.hbt_from_die = from_die;
-    hbt_node.hbt_to_die = to_die;
-    hbt_node.hbt_res = hbt_res_per_crossing;
+    hbt_node.hbt_from_die = normalizeDie(from_die);
+    hbt_node.hbt_to_die = normalizeDie(to_die);
+    hbt_node.hbt_res = params_.hbt_res;
     hbt_node.hbt_cap = params_.hbt_cap;
+    hbt_node.incoming_hbt_count = 1;
+    hbt_node.incoming_hbt_res = params_.hbt_res;
+    hbt_node.incoming_hbt_cap = params_.hbt_cap;
     hbt_node.incoming_segment_begin = seg_begin_hbt;
-    hbt_node.incoming_segment_count = static_cast<int>(seg_parent_to_hbt.size()) + 1;
+    hbt_node.incoming_segment_count = static_cast<int>(wire_to_hbt.size()) + 1;
 
     const TreeNodeState& p = result.tree_nodes[parent_tree_index];
     hbt_node.depth = p.depth + 1;
-    for (const RoutedSegment& s : seg_parent_to_hbt) {
-        const int seg_len_dbu = manhattan(s.p1, s.p2);
-        hbt_node.incoming_wire_length += seg_len_dbu;
-        const bool horizontal = std::abs(s.p1.x - s.p2.x) >= std::abs(s.p1.y - s.p2.y);
-        const EffectiveRC rc = db_.computeDirectionalRCForDie(normalizeDie(s.p1.die), horizontal);
-        const double seg_len_um = db_.dbuToMicronLength(seg_len_dbu);
-        hbt_node.incoming_wire_res += rc.unit_res * seg_len_um;
-        hbt_node.incoming_wire_cap += rc.unit_cap * seg_len_um;
-    }
-    hbt_node.incoming_hbt_count = 1;
-    hbt_node.incoming_hbt_res = hbt_res_per_crossing;
-    hbt_node.incoming_hbt_cap = params_.hbt_cap;
-    hbt_node.path_length_from_root = p.path_length_from_root + hbt_node.incoming_wire_length;
+    hbt_node.path_length_from_root = p.path_length_from_root;
     hbt_node.hbt_count_from_root = p.hbt_count_from_root + 1;
     result.tree_nodes.push_back(hbt_node);
     const int hbt_tree_idx = static_cast<int>(result.tree_nodes.size()) - 1;
 
-    commitSegments(result,
-                   seg_hbt_to_sink,
-                   sink_pin_index,
-                   hbt_tree_idx,
-                   sink_point,
-                   0);
+    // Topology must be parent -> HBT node -> sink node.
+    commitSegments(result, wire_from_hbt, sink_pin_index, hbt_tree_idx, sink_point, 0);
     return true;
 }
 
@@ -1658,4 +1696,45 @@ int PDTreeRouter::manhattan(const RoutedPoint& a, const RoutedPoint& b) const
 {
     // Keep all db_/member accesses inside member-function scope only.
     return manhattan(a.x, a.y, b.x, b.y);
+}
+
+RouteValidationResult PDTreeRouter::validateRouteResultTopology(const NetRouteResult& result) const
+{
+    RouteValidationResult vr;
+    const auto& slots = grid_.hbt.getSlots();
+    std::unordered_map<long long, std::vector<int>> adj;
+    auto key=[](const RoutedPoint& p){ return (static_cast<long long>(p.x)<<32) ^ (static_cast<long long>(p.y)<<8) ^ static_cast<int>(normalizeDie(p.die)); };
+
+    for (const auto& seg : result.segments) {
+        if (!seg.uses_hbt && normalizeDie(seg.p1.die) != normalizeDie(seg.p2.die)) {
+            vr.non_hbt_cross_die_segments++;
+            vr.errors.push_back("non_hbt_cross_die_segment");
+        }
+        if (seg.uses_hbt) {
+            if (seg.p1.x != seg.p2.x || seg.p1.y != seg.p2.y || normalizeDie(seg.p1.die)==normalizeDie(seg.p2.die) || seg.hbt_id < 0 || seg.hbt_id >= static_cast<int>(slots.size())) {
+                vr.invalid_hbt_segments++;
+                vr.errors.push_back("invalid_hbt_segment");
+            }
+        }
+        adj[key(seg.p1)].push_back(static_cast<int>(adj[key(seg.p1)].size()));
+        adj[key(seg.p2)].push_back(static_cast<int>(adj[key(seg.p2)].size()));
+    }
+    vr.disconnected_components = result.segments.empty() ? 0 : 1;
+    for (const auto& n : result.tree_nodes) {
+        if (n.node_type != TreeNodeState::NodeType::kHBT) continue;
+        if (n.assigned_hbt_id < 0 || n.assigned_hbt_id >= static_cast<int>(slots.size())) { vr.hbt_node_segment_mismatches++; continue; }
+        const auto& slot = slots[n.assigned_hbt_id];
+        bool matched = false;
+        for (const auto& seg : result.segments) {
+            if (seg.uses_hbt && seg.hbt_id == n.assigned_hbt_id && seg.p1.x == slot.x && seg.p1.y == slot.y) { matched = true; break; }
+        }
+        if (!matched || n.point.x != slot.x || n.point.y != slot.y || !n.hbt_assigned) {
+            vr.hbt_node_segment_mismatches++;
+            vr.errors.push_back("hbt_node_segment_mismatch");
+        }
+    }
+    if (vr.non_hbt_cross_die_segments || vr.invalid_hbt_segments || vr.hbt_node_segment_mismatches) {
+        vr.valid = false;
+    }
+    return vr;
 }
