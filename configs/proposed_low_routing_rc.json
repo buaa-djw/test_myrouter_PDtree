@@ -1,5 +1,5 @@
 {
-  "experiment_name": "gcd_proposed_high_hbt_rc",
+  "experiment_name": "gcd_proposed_low_hbt_rc",
   "benchmark": "gcd",
   "cost_mode": "proposed",
   "input":{"common_lef":"/home/djw/Desktop/TaiWei/ORFS-Research/tools/OpenROAD/src/test_myrouter_PDtree/test/asap7_nangate45_2A6M10M.lef",
@@ -8,7 +8,7 @@
          "bottom_lef":"/home/djw/Desktop/TaiWei/ORFS-Research/tools/OpenROAD/src/test_myrouter_PDtree/test/NangateOpenCellLibrary.macro.mod.bottom.processed.lef",
          "def_file":"/home/djw/Desktop/TaiWei/ORFS-Research/tools/OpenROAD/src/test_myrouter_PDtree/test/gcd1.def"},
   "output": {
-    "output_dir": "results/gcd_proposed_high_hbt_rc"
+    "output_dir": "results/gcd_proposed_low_hbt_rc"
   },
   "pd_tree": {
     "max_nets": -1,
@@ -19,10 +19,10 @@
     "default_sink_cap": 0.001,
     "hbt_res": 5,
     "hbt_cap": 0.001,
-    "hbt_rc_scale": 10.0
+    "hbt_rc_scale": 0.1
   },
   "report_cost": {
-    "coef_wire_delay": 1.0,
+    "coef_wire_delay": 0.5,
     "coef_parent_load_delay": 1.0,
     "coef_hbt_rc_delay": 1.0,
     "coef_hbt_net_penalty": 1.0,
