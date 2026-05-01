@@ -64,6 +64,24 @@ bool ExperimentConfig::loadFromFile(const std::string& p, ExperimentConfig& c, s
     if (j.contains("cost_weights")) {
         std::cerr << "[config] deprecated old objective weight ignored\n";
     }
+    c.cost_mode = gs(j, "cost_mode", c.cost_mode);
+    if (j.contains("output")) {
+        auto& out = j["output"];
+        c.output.output_dir = gs(out, "output_dir", c.output.output_dir);
+        c.output.summary_report = gs(out, "summary_report", c.output.summary_report);
+        c.output.net_info = gs(out, "net_info", c.output.net_info);
+        c.output.plot_data_dir = gs(out, "plot_data_dir", c.output.plot_data_dir);
+        c.output.plot_dir = gs(out, "plot_dir", c.output.plot_dir);
+        c.output.enable_plot_generation = gb(out, "enable_plot_generation", c.output.enable_plot_generation);
+    }
+    if (j.contains("debug")) {
+        auto& d = j["debug"];
+        c.debug.dump_candidate_cost = gb(d, "dump_candidate_cost", c.debug.dump_candidate_cost);
+        c.debug.dump_plot_data = gb(d, "dump_plot_data", c.debug.dump_plot_data);
+    }
+    for (const char* k : {"alpha_path_depth","beta_stretch","beta_hbt_depth","beta_hbt_stack","beta_hbt_branch","beta_hbt_rc","beta_cap_load","length_normalization"}) {
+        if (j.contains(k)) { std::cerr << "[config] warning: deprecated field ignored: " << k << "\n"; }
+    }
     if (j.contains("rc")) {
         auto& r = j["rc"];
         c.rc.source_res = gd(r, "source_res", c.rc.source_res);
@@ -78,3 +96,5 @@ bool ExperimentConfig::loadFromFile(const std::string& p, ExperimentConfig& c, s
 bool ExperimentConfig::validate(std::string& e) const { if(input.common_lef.empty()||input.hbt_lef.empty()||input.upper_lef.empty()||input.bottom_lef.empty()||input.def_file.empty()){e="input path missing"; return false;} return true; }
 PDTreeRouter::Params ExperimentConfig::buildRouterParams() const { PDTreeRouter::Params p; p.source_res=rc.source_res; p.default_sink_cap=rc.default_sink_cap; p.hbt_res=rc.hbt_res*rc.hbt_rc_scale; p.hbt_cap=rc.hbt_cap*rc.hbt_rc_scale; p.max_candidate_parents=pd_tree.max_candidate_parents; p.max_candidate_hbts=pd_tree.max_candidate_hbts; p.beam_width_3d=pd_tree.beam_width_3d; p.beam_branch_candidates_3d=pd_tree.beam_branch_candidates_3d; p.max_local_hbt_candidates=pd_tree.max_local_hbt_candidates; p.max_hbt_nearest_k=pd_tree.max_hbt_nearest_k; p.verbose=pd_tree.verbose; p.enable_hbt_inner_node_optimization=false; p.dump_candidate_cost_debug=debug.dump_candidate_cost; p.report_cost=report_cost; return p; }
 std::string ExperimentConfig::dumpJsonString() const { json j; j["experiment_name"]=experiment_name; j["benchmark"]=benchmark; return j.dump(2); }
+
+

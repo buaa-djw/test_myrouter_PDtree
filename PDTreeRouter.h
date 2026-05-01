@@ -115,6 +115,15 @@ struct NetRouteResult
     std::vector<TreeNodeState> tree_nodes;
     std::vector<RoutedSegment> segments;
 
+    double route_cost_total = 0.0;
+    double route_wire_delay = 0.0;
+    double route_parent_load_delay = 0.0;
+    double route_hbt_rc_delay = 0.0;
+    double route_hbt_net_penalty_delay = 0.0;
+    double route_hbt_net_quad_penalty_delay = 0.0;
+    double route_hbt_path_penalty_delay = 0.0;
+    double route_stretch_penalty_delay = 0.0;
+
     // Per-net delay annotation result (filled by EDCompute).
     NetDelaySummary delay_summary;
     RouteValidationResult validation;
@@ -393,12 +402,14 @@ private:
                                                const PartialRouteState& state,
                                                int hbt_tree_node) const;
     bool materializeHBTNodesToSegments(const Net& net, PartialRouteState& state) const;
+    // Deprecated. Not used by RC-delay-driven PDTreeRouter cost.
     double estimateHBTNodeCost(const Net& net,
                                const PartialRouteState& state,
                                int hbt_tree_node,
                                int candidate_hbt_id) const;
     double computeHBTScarcityPenalty(const std::unordered_set<int>& local_reserved_hbts,
                                      int hbt_id) const;
+    // Deprecated. Not used by RC-delay-driven PDTreeRouter cost.
     double evaluateHBTPositionCost(const Net& net,
                                    const NetRouteResult& result) const;
 

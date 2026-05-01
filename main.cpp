@@ -15,6 +15,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -72,10 +73,10 @@ fs::path findPlotScript(const std::string& cfg_path, const std::string& argv0)
     std::vector<fs::path> candidates;
 
     // Case 1: run from src/test_myrouter_PDtree
-    candidates.emplace_back(fs::current_path() / "scripts" / "plot_3d_nets.py");
+    candidates.emplace_back(fs::current_path() / "scripts" / "plot_nets.py");
 
     // Case 2: run from OpenROAD root
-    candidates.emplace_back(fs::current_path() / "src" / "test_myrouter_PDtree" / "scripts" / "plot_3d_nets.py");
+    candidates.emplace_back(fs::current_path() / "src" / "test_myrouter_PDtree" / "scripts" / "plot_nets.py");
 
     // Case 3: derive module root from config path: <module>/configs/*.json
     if (!cfg_path.empty()) {
@@ -83,7 +84,7 @@ fs::path findPlotScript(const std::string& cfg_path, const std::string& argv0)
         if (cfg_abs.has_parent_path()) {
             fs::path config_dir = cfg_abs.parent_path();
             fs::path module_dir = config_dir.parent_path();
-            candidates.emplace_back(module_dir / "scripts" / "plot_3d_nets.py");
+            candidates.emplace_back(module_dir / "scripts" / "plot_nets.py");
         }
     }
 
@@ -91,7 +92,7 @@ fs::path findPlotScript(const std::string& cfg_path, const std::string& argv0)
     if (!argv0.empty()) {
         fs::path exe_path = fs::absolute(argv0);
         if (exe_path.has_parent_path()) {
-            candidates.emplace_back(exe_path.parent_path() / "scripts" / "plot_3d_nets.py");
+            candidates.emplace_back(exe_path.parent_path() / "scripts" / "plot_nets.py");
         }
     }
 
@@ -223,11 +224,7 @@ int main(int argc, char** argv)
               << "\n";
 
     // ------------------------------------------------------------
-    // 5. Annotate delay.
-    //
-    // Important:
-    // routeSignalNets() may filter and sort nets, so results[i] does NOT
-    // necessarily correspond to db.nets[i]. We must map by net name.
+    // 5. Annotate delay by net name (results order may differ from db.nets order).
     // ------------------------------------------------------------
     EDCompute ed(
         db,
@@ -240,48 +237,56 @@ int main(int argc, char** argv)
         }
     );
 
-    for (auto& result : results) {
-        if (!result.success) {
+    std::unordered_map<std::string, const Net*> net_by_name;
+    for (const Net& net : db.nets) {
+        net_by_name[net.name] = &net;
+    }
+
+    for (NetRouteResult& result : results) {
+        auto it = net_by_name.find(result.net_name);
+        if (it == net_by_name.end()) {
+            result.success = false;
+            result.status = "missing_net_in_db";
+            result.fail_reason = "cannot find matching net by name";
+            result.delay_summary.ready = false;
             continue;
         }
 
-        const Net* net = findNetByName(db, result.net_name);
-        if (net == nullptr) {
-            std::cerr << "[main] warning: cannot find net for result: "
-                      << result.net_name << "\n";
-            continue;
-        }
-
-        if (!ed.annotateNetDelay(*net, result)) {
-            std::cerr << "[main] warning: EDCompute failed for net: "
-                      << result.net_name << "\n";
+        if (result.success && result.status != "invalid_topology") {
+            (void) ed.annotateNetDelay(*it->second, result);
+        } else {
+            result.delay_summary.ready = false;
         }
     }
 
     // ------------------------------------------------------------
     // 6. Create output directories
     // ------------------------------------------------------------
-    const fs::path output_dir = cfg.output.output_dir;
+    fs::path output_dir = cfg.output.output_dir;
+    if (cfg.output.output_dir.empty() || cfg.output.output_dir == "results/default") {
+        output_dir = fs::path("results") / cfg.experiment_name;
+    }
     const fs::path plot_data_dir = output_dir / cfg.output.plot_data_dir;
+    const fs::path plot_data_2d_dir = plot_data_dir / "2d";
+    const fs::path plot_data_3d_dir = plot_data_dir / "3d";
     const fs::path plot_dir = output_dir / cfg.output.plot_dir;
+    const fs::path plot_2d_dir = plot_dir / "2d";
+    const fs::path plot_3d_dir = plot_dir / "3d";
 
     fs::create_directories(output_dir);
     fs::create_directories(plot_data_dir);
+    fs::create_directories(plot_data_2d_dir);
+    fs::create_directories(plot_data_3d_dir);
     fs::create_directories(plot_dir);
+    fs::create_directories(plot_2d_dir);
+    fs::create_directories(plot_3d_dir);
 
     // ------------------------------------------------------------
-    // 7. Write plot data for 3D nets
+    // 7. Write plot data for all nets
     // ------------------------------------------------------------
     if (cfg.debug.dump_plot_data) {
         for (const auto& result : results) {
-            if (!result.is_3d) {
-                continue;
-            }
-            // Debug purpose: dump invalid 3D nets as well so we can inspect
-            // topology failures (e.g., HBT node/segment mismatch) in JSON/PNG.
-            if (result.success || cfg.output.dump_invalid_3d_nets) {
-                write3DNetPlotData(plot_data_dir.string(), result);
-            }
+            writeNetPlotData(output_dir.string(), result);
         }
     }
 
@@ -316,7 +321,7 @@ int main(int argc, char** argv)
         const fs::path script = findPlotScript(cfg_path, argc > 0 ? argv[0] : "");
 
         if (script.empty()) {
-            std::cerr << "[main] warning: plot_3d_nets.py not found. "
+            std::cerr << "[main] warning: plot_nets.py not found. "
                       << "Skip PNG generation.\n";
         } else {
             const std::string cmd =

@@ -11,74 +11,30 @@ void writeExperimentSummary(const std::string& path,
                             double rt)
 {
     std::ofstream o(path);
-    int route_function_success = 0;
-    int topology_valid_nets = 0;
-    int delay_ready_nets = 0;
-    int routed_2d_nets = 0;
-    int routed_3d_nets = 0;
-    int invalid_3d_nets = 0;
-    int unknown_die_nets = 0;
-    int invalid_topology_nets = 0;
-    int non_hbt_cross_die_segments = 0;
-    int invalid_hbt_segments = 0;
-    int disconnected_3d_nets = 0;
-    int hbt_node_segment_mismatch_nets = 0;
-
+    int routed_success = 0;
+    int routed_2d = 0;
+    int routed_3d = 0;
+    int topology_valid = 0;
+    int delay_ready = 0;
+    double total_cost = 0.0;
+    double total_wl = 0.0;
+    int total_hbt = 0;
     for (const auto& r : results) {
-        if (r.success) route_function_success++;
-        if (r.validation.valid) topology_valid_nets++;
-        if (r.delay_summary.ready) delay_ready_nets++;
-        if (!r.is_3d && r.success) routed_2d_nets++;
-        if (r.is_3d && r.success) routed_3d_nets++;
-        if (r.is_3d && !r.validation.valid) invalid_3d_nets++;
-        if (r.status == "invalid_topology") invalid_topology_nets++;
-        non_hbt_cross_die_segments += r.validation.non_hbt_cross_die_segments;
-        invalid_hbt_segments += r.validation.invalid_hbt_segments;
-        if (r.validation.disconnected_components > 1) disconnected_3d_nets++;
-        if (r.validation.hbt_node_segment_mismatches > 0) hbt_node_segment_mismatch_nets++;
-        for (const auto& e : r.validation.errors) {
-            if (e.find("unknown_die") != std::string::npos) {
-                unknown_die_nets++;
-                break;
-            }
+        routed_success += r.success ? 1 : 0;
+        routed_2d += (!r.is_3d && r.success) ? 1 : 0;
+        routed_3d += (r.is_3d && r.success) ? 1 : 0;
+        topology_valid += r.validation.valid ? 1 : 0;
+        delay_ready += r.delay_summary.ready ? 1 : 0;
+        total_cost += r.route_cost_total;
+        for (const auto& s : r.segments) {
+            total_wl += std::abs(s.p1.x - s.p2.x) + std::abs(s.p1.y - s.p2.y);
+            total_hbt += s.uses_hbt ? 1 : 0;
         }
     }
-
-    o << "Experiment Info\nname=" << cfg.experiment_name << "\nstart=" << st << "\nend=" << et << "\nruntime=" << rt << "\n\n";
+    o << "Experiment Info\n";
+    o << "experiment_name=" << cfg.experiment_name << "\nbenchmark=" << cfg.benchmark << "\ncost_mode=" << cfg.cost_mode << "\nstart=" << st << "\nend=" << et << "\nruntime=" << rt << "\noutput_dir=" << cfg.output.output_dir << "\n\n";
     o << "Overall Metrics\n";
-    o << "total_nets=" << results.size() << "\n";
-    o << "route_function_success=" << route_function_success << "\n";
-    o << "topology_valid_nets=" << topology_valid_nets << "\n";
-    o << "invalid_topology_nets=" << invalid_topology_nets << "\n";
-    o << "delay_ready_nets=" << delay_ready_nets << "\n";
-    o << "routed_2d_nets=" << routed_2d_nets << "\n";
-    o << "routed_3d_nets=" << routed_3d_nets << "\n";
-    o << "invalid_3d_nets=" << invalid_3d_nets << "\n";
-    o << "unknown_die_nets=" << unknown_die_nets << "\n";
-    o << "non_hbt_cross_die_segments=" << non_hbt_cross_die_segments << "\n";
-    o << "invalid_hbt_segments=" << invalid_hbt_segments << "\n";
-    o << "disconnected_3d_nets=" << disconnected_3d_nets << "\n";
-    o << "hbt_node_segment_mismatch_nets=" << hbt_node_segment_mismatch_nets << "\n\n";
-    o << "config.output.dump_invalid_3d_nets=" << cfg.output.dump_invalid_3d_nets << "\n\n";
-    o << "report_cost.coef_wire_delay=" << cfg.report_cost.coef_wire_delay << "\n";
-    o << "report_cost.coef_parent_load_delay=" << cfg.report_cost.coef_parent_load_delay << "\n";
-    o << "report_cost.coef_hbt_rc_delay=" << cfg.report_cost.coef_hbt_rc_delay << "\n";
-    o << "report_cost.coef_hbt_net_penalty=" << cfg.report_cost.coef_hbt_net_penalty << "\n";
-    o << "report_cost.coef_hbt_net_quad_penalty=" << cfg.report_cost.coef_hbt_net_quad_penalty << "\n";
-    o << "report_cost.coef_hbt_path_penalty=" << cfg.report_cost.coef_hbt_path_penalty << "\n";
-    o << "report_cost.coef_stretch_penalty=" << cfg.report_cost.coef_stretch_penalty << "\n";
-    o << "report_cost.stretch_limit=" << cfg.report_cost.stretch_limit << "\n";
-    o << "report_cost.max_hbt_per_path=" << cfg.report_cost.max_hbt_per_path << "\n";
-    o << "report_cost.max_hbt_per_net=" << cfg.report_cost.max_hbt_per_net << "\n\n";
-
-    o << "Per-net Summary\n";
-    for (const auto& r : results) {
-        o << "net=" << r.net_name << " status=" << r.status << " route_function_success=" << r.success
-          << " topology_valid=" << r.validation.valid << " delay_ready=" << r.delay_summary.ready
-          << " component_count=" << r.validation.disconnected_components
-          << " non_hbt_cross_die_segments=" << r.validation.non_hbt_cross_die_segments
-          << " invalid_hbt_segments=" << r.validation.invalid_hbt_segments
-          << " hbt_node_segment_mismatches=" << r.validation.hbt_node_segment_mismatches
-          << " validation_errors=" << r.fail_reason << "\n";
-    }
+    o << "total_nets=" << results.size() << "\nrouted_success=" << routed_success << "\nrouted_failed=" << (static_cast<int>(results.size()) - routed_success) << "\nrouted_2d_nets=" << routed_2d << "\nrouted_3d_nets=" << routed_3d << "\ntopology_valid_nets=" << topology_valid << "\ndelay_ready_nets=" << delay_ready << "\n\n";
+    o << "Aggregated Metrics\n";
+    o << "total_wirelength=" << total_wl << "\ntotal_route_cost=" << total_cost << "\naverage_route_cost=" << (results.empty()?0.0:total_cost/results.size()) << "\ntotal_hbt_count=" << total_hbt << "\n\n";
 }

@@ -217,10 +217,8 @@ double PDTreeRouter::evaluateObjectivePublic(const Net& net,
 {
     (void) net;
 
-    // The core router now uses accumulated report-aligned PD cost while
-    // constructing the tree. A finished NetRouteResult does not store that
-    // history, so this public helper returns a simple geometry proxy only.
-    return totalWireLength(result.segments);
+    // Deprecated. Not used by RC-delay-driven PDTreeRouter cost.
+    return result.route_cost_total;
 }
 
 bool PDTreeRouter::annotateDelayPublic(const Net& net,
@@ -271,6 +269,8 @@ NetRouteResult PDTreeRouter::route2DNet(const Net& net)
             result.tree_nodes.push_back(root);
         }
 
+        result.status = "ok";
+        result.validation = validateRouteResultTopology(result);
         (void) annotateDelayPublic(net, result);
         return result;
     }
@@ -312,6 +312,8 @@ NetRouteResult PDTreeRouter::route2DNet(const Net& net)
     }
 
     result.success = true;
+    result.status = "ok";
+    result.validation = validateRouteResultTopology(result);
     (void) annotateDelayPublic(net, result);
 
     if (params_.verbose) {
@@ -455,6 +457,7 @@ NetRouteResult PDTreeRouter::route3DNet(const Net& net)
         return best.result;
     }
 
+    best.result.route_cost_total = best.accumulated_cost;
     (void) annotateDelayPublic(net, best.result);
     commitNetLevelHBTReservation(best.local_reserved_hbts, net.name);
     return best.result;
@@ -609,6 +612,8 @@ NetRouteResult PDTreeRouter::route3DNetRobustFallback(const Net& net,
     }
 
     result.success = true;
+    result.status = "ok";
+    result.validation = validateRouteResultTopology(result);
     (void) annotateDelayPublic(net, result);
     int hbt_segments = 0;
     for (const RoutedSegment& s : result.segments) {
@@ -994,6 +999,14 @@ bool PDTreeRouter::connectSinkSameDie(const Net& net,
                    best_parent_tree_idx,
                    sink_pt,
                    0);
+    result.route_cost_total += best_score.objective;
+    result.route_wire_delay += best_score.cost.wire_delay;
+    result.route_parent_load_delay += best_score.cost.parent_load_delay;
+    result.route_hbt_rc_delay += best_score.cost.hbt_rc_delay;
+    result.route_hbt_net_penalty_delay += best_score.cost.hbt_net_penalty_delay;
+    result.route_hbt_net_quad_penalty_delay += best_score.cost.hbt_net_quad_penalty_delay;
+    result.route_hbt_path_penalty_delay += best_score.cost.hbt_path_penalty_delay;
+    result.route_stretch_penalty_delay += best_score.cost.stretch_penalty_delay;
     in_tree[sink_pin_index] = true;
     return true;
 }
@@ -1081,6 +1094,14 @@ bool PDTreeRouter::connectSinkCrossDie(const Net& net,
                    best_parent_tree_idx,
                    sink_pt,
                    1);
+    result.route_cost_total += best_score.objective;
+    result.route_wire_delay += best_score.cost.wire_delay;
+    result.route_parent_load_delay += best_score.cost.parent_load_delay;
+    result.route_hbt_rc_delay += best_score.cost.hbt_rc_delay;
+    result.route_hbt_net_penalty_delay += best_score.cost.hbt_net_penalty_delay;
+    result.route_hbt_net_quad_penalty_delay += best_score.cost.hbt_net_quad_penalty_delay;
+    result.route_hbt_path_penalty_delay += best_score.cost.hbt_path_penalty_delay;
+    result.route_stretch_penalty_delay += best_score.cost.stretch_penalty_delay;
 
     collectHBTsFromSegments(best_segs, local_reserved_hbts);
     in_tree[sink_pin_index] = true;
@@ -1095,7 +1116,7 @@ PDTreeRouter::ReportCostBreakdown PDTreeRouter::computeReportPDCost(
     const RoutedPoint& attach_point,
     bool introduces_hbt,
     int hbt_id,
-    double extra_path_after_attach) const
+    double extra_path_after_attach_dbu) const
 {
     ReportCostBreakdown cost;
 
@@ -1119,7 +1140,7 @@ PDTreeRouter::ReportCostBreakdown PDTreeRouter::computeReportPDCost(
     const RoutedPoint sink_point = pinToPoint(sink_pin);
 
     cost.parent_to_attach_dbu = static_cast<double>(manhattan(parent.point, attach_point));
-    cost.attach_to_sink_dbu = std::max(0.0, extra_path_after_attach);
+    cost.attach_to_sink_dbu = std::max(0.0, extra_path_after_attach_dbu);
     cost.branch_wire_dbu = cost.parent_to_attach_dbu + cost.attach_to_sink_dbu;
     cost.parent_to_attach_um = db_.dbuToMicronLength(static_cast<int>(cost.parent_to_attach_dbu));
     cost.attach_to_sink_um = db_.dbuToMicronLength(static_cast<int>(cost.attach_to_sink_dbu));
@@ -1231,6 +1252,7 @@ PDTreeRouter::CandidateScore PDTreeRouter::scoreAttachmentCandidate(
         std::ofstream ofs("candidate_cost_debug.csv", std::ios::app);
         if (ofs) {
             ofs << net.name << ','
+                << (net.is_3d ? "3D" : "2D") << ','
                 << sink_pin_index << ','
                 << parent_tree_index << ','
                 << introduces_hbt << ','
@@ -1262,7 +1284,7 @@ PDTreeRouter::CandidateScore PDTreeRouter::scoreAttachmentCandidate(
                 << score.cost.weighted_hbt_net_penalty << ','
                 << score.cost.weighted_hbt_net_quad_penalty << ','
                 << score.cost.weighted_hbt_path_penalty << ','
-                << score.cost.weighted_stretch_penalty << '\n';
+                << score.cost.weighted_stretch_penalty << ',' << score.cost.total << '\n';
         }
     }
 
