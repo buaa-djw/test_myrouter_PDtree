@@ -641,9 +641,16 @@ std::vector<PDTreeRouter::PartialRouteState> PDTreeRouter::expandSinkSameDieCand
         }
         PartialRouteState next = state;
         commitSegments(next.result, segs, sink_pin_index, tidx, sink_pt, 0);
+        CandidateScore cs = scoreAttachmentCandidate(net, state.result, segs, sink_pin_index, tidx, sink_pt, 0);
+        if (!cs.valid) {
+            continue;
+        }
+        next.accumulated_cost = state.accumulated_cost + cs.objective;
         next.in_tree[sink_pin_index] = true;
         next.attached_sinks += 1;
-        next.score = evaluateStateScore(net, next.result);
+        next.accumulated_cost = state.accumulated_cost;
+        next.score.valid = true;
+        next.score.objective = next.accumulated_cost;
         out.push_back(std::move(next));
         if (static_cast<int>(out.size()) >= std::max(1, params_.beam_branch_candidates_3d)) {
             break;
@@ -677,13 +684,19 @@ std::vector<PDTreeRouter::PartialRouteState> PDTreeRouter::expandSinkCrossDieCan
             if (!commitCrossDieBranch(next.result, tidx, sink_pin_index, hid)) {
                 continue;
             }
+            const auto& slot = grid_.hbt.getSlots().at(hid);
+            RoutedPoint hbt_from{slot.x, slot.y, state.result.tree_nodes[tidx].point.die};
+            CandidateScore cs = scoreAttachmentCandidate(net, state.result, {}, sink_pin_index, tidx, hbt_from, 1);
+            if (!cs.valid) {
+                continue;
+            }
+            next.accumulated_cost = state.accumulated_cost + cs.objective;
             next.local_reserved_hbts.insert(hid);
             next.in_tree[sink_pin_index] = true;
             next.attached_sinks += 1;
-            if (params_.enable_hbt_inner_node_optimization) {
-                (void) optimizeHBTInnerNodesForState(net, next);
-            }
-            next.score = evaluateStateScore(net, next.result);
+                        next.accumulated_cost = state.accumulated_cost;
+        next.score.valid = true;
+        next.score.objective = next.accumulated_cost;
             out.push_back(std::move(next));
             ++emitted;
             if (emitted >= std::max(1, params_.beam_branch_candidates_3d)) {
@@ -966,83 +979,98 @@ bool PDTreeRouter::connectSinkCrossDie(const Net& net,
     return true;
 }
 
+PDTreeRouter::ReportCostBreakdown PDTreeRouter::computeReportPDCost(
+    const Net& net,
+    const NetRouteResult& current_tree,
+    int parent_tree_index,
+    int sink_pin_index,
+    const RoutedPoint& attach_point,
+    bool introduces_hbt,
+    int /*hbt_id*/) const
+{
+    ReportCostBreakdown cost;
+    if (parent_tree_index < 0 || parent_tree_index >= static_cast<int>(current_tree.tree_nodes.size())) {
+        return cost;
+    }
+    if (sink_pin_index < 0 || sink_pin_index >= static_cast<int>(net.pins.size())) {
+        return cost;
+    }
+    const TreeNodeState& parent = current_tree.tree_nodes[parent_tree_index];
+    const RoutedPoint root_point = current_tree.tree_nodes.at(current_tree.root_tree_index).point;
+    const RoutedPoint sink_point = pinToPoint(net.pins[sink_pin_index]);
+
+    cost.dij = manhattan(parent.point, attach_point);
+    cost.parent_path_length = static_cast<double>(parent.path_length_from_root);
+    cost.pd_depth_term = params_.report_cost.alpha_path_depth * cost.parent_path_length;
+    cost.candidate_path_length = cost.parent_path_length + cost.dij;
+    cost.src_to_sink_manhattan = static_cast<double>(manhattan(root_point, sink_point));
+    const double stretch_limit_length = params_.report_cost.stretch_limit * cost.src_to_sink_manhattan;
+    cost.stretch_violation = std::max(0.0, cost.candidate_path_length - stretch_limit_length);
+    cost.stretch_penalty = params_.report_cost.beta_stretch * cost.stretch_violation;
+    const Pin& sink_pin = net.pins[sink_pin_index];
+    cost.sink_cap = sink_pin.has_input_cap ? sink_pin.input_cap : params_.default_sink_cap;
+    cost.cap_penalty = params_.report_cost.beta_cap_load * cost.sink_cap * cost.candidate_path_length;
+
+    if (introduces_hbt) {
+        const int hbt_count_after = parent.hbt_count_from_root + 1;
+        if (hbt_count_after > params_.report_cost.max_hbt_per_path) {
+            return cost;
+        }
+        if (params_.report_cost.max_hbt_per_net > 0) {
+            int current_hbt_count = 0;
+            for (const auto& seg : current_tree.segments) {
+                if (seg.uses_hbt) {
+                    current_hbt_count++;
+                }
+            }
+            if (current_hbt_count >= params_.report_cost.max_hbt_per_net) {
+                return cost;
+            }
+        }
+        const int parent_degree = countTreeNodeChildren(current_tree, parent_tree_index);
+        cost.hbt_depth_penalty = params_.report_cost.beta_hbt_depth * cost.parent_path_length;
+        cost.hbt_stack_penalty = params_.report_cost.beta_hbt_stack * hbt_count_after * hbt_count_after;
+        cost.hbt_branch_penalty = params_.report_cost.beta_hbt_branch * static_cast<double>(parent_degree + 1);
+        cost.hbt_rc_penalty = params_.report_cost.beta_hbt_rc * (params_.hbt_res * cost.sink_cap + params_.hbt_cap);
+        cost.hbt_penalty = cost.hbt_depth_penalty + cost.hbt_stack_penalty + cost.hbt_branch_penalty + cost.hbt_rc_penalty;
+    }
+
+    cost.total = cost.dij + cost.pd_depth_term + cost.stretch_penalty + cost.hbt_penalty + cost.cap_penalty;
+    cost.valid = true;
+    return cost;
+}
+
 PDTreeRouter::CandidateScore PDTreeRouter::scoreAttachmentCandidate(
     const Net& net,
     const NetRouteResult& current,
-    const std::vector<RoutedSegment>& candidate_segs,
+    const std::vector<RoutedSegment>& /*candidate_segs*/,
     int sink_pin_index,
     int parent_tree_index,
     const RoutedPoint& sink_attach_point,
     int extra_hbt_count) const
 {
     CandidateScore score;
-
-    NetRouteResult tmp = current;
-    commitSegments(tmp,
-                   candidate_segs,
-                   sink_pin_index,
-                   parent_tree_index,
-                   sink_attach_point,
-                   extra_hbt_count);
-
-    const TimingSummary t = evaluateTimingSummary(net, tmp);
-
+    const bool introduces_hbt = extra_hbt_count > 0;
+    score.cost = computeReportPDCost(net, current, parent_tree_index, sink_pin_index, sink_attach_point, introduces_hbt, -1);
+    if (!score.cost.valid) {
+        return score;
+    }
     score.valid = true;
-    score.avg_sink_delay = t.avg_sink_delay;
-    score.max_sink_delay = t.max_sink_delay;
-    score.hbt_count = t.hbt_count;
-    score.total_wirelength = t.total_wirelength;
-    score.avg_stretch = t.avg_stretch;
-
-    score.hbt_position_cost = evaluateHBTPositionCost(net, tmp);
-    if (params_.use_proposed_cost) {
-        score.objective = params_.weight_avg_delay * score.avg_sink_delay
-                        + params_.weight_max_delay * score.max_sink_delay
-                        + params_.weight_hbt_count * static_cast<double>(score.hbt_count)
-                        + params_.weight_wirelength * score.total_wirelength
-                        + params_.weight_stretch * score.avg_stretch
-                        + score.hbt_position_cost
-                        + params_.hbt_res * 1e-3 * static_cast<double>(score.hbt_count);
-    } else {
-        score.objective = params_.weight_wirelength * score.total_wirelength
-                        + params_.weight_stretch * score.avg_stretch
-                        + 0.01 * static_cast<double>(score.hbt_count);
-    }
-    if (params_.dump_candidate_cost_debug) {
-        std::ofstream ofs("candidate_cost_debug.csv", std::ios::app);
-        if (ofs) {
-            ofs << net.name << "," << sink_pin_index << "," << parent_tree_index << ","
-                << score.objective << "," << score.avg_sink_delay << "," << score.max_sink_delay << ","
-                << score.total_wirelength << "," << score.hbt_count << "," << score.hbt_position_cost << "\n";
-        }
-    }
+    score.objective = score.cost.total;
     return score;
 }
 
-PDTreeRouter::CandidateScore PDTreeRouter::evaluateStateScore(const Net& net,
+PDTreeRouter::CandidateScore PDTreeRouter::evaluateStateScore(const Net& /*net*/,
                                                               const NetRouteResult& state_result) const
 {
     CandidateScore score;
-    const TimingSummary t = evaluateTimingSummary(net, state_result);
     score.valid = true;
-    score.avg_sink_delay = t.avg_sink_delay;
-    score.max_sink_delay = t.max_sink_delay;
-    score.hbt_count = t.hbt_count;
-    score.total_wirelength = t.total_wirelength;
-    score.avg_stretch = t.avg_stretch;
-    score.hbt_position_cost = evaluateHBTPositionCost(net, state_result);
-    if (params_.use_proposed_cost) {
-        score.objective = params_.weight_avg_delay * score.avg_sink_delay
-                        + params_.weight_max_delay * score.max_sink_delay
-                        + params_.weight_hbt_count * static_cast<double>(score.hbt_count)
-                        + params_.weight_wirelength * score.total_wirelength
-                        + params_.weight_stretch * score.avg_stretch
-                        + score.hbt_position_cost
-                        + params_.hbt_res * 1e-3 * static_cast<double>(score.hbt_count);
-    } else {
-        score.objective = params_.weight_wirelength * score.total_wirelength
-                        + params_.weight_stretch * score.avg_stretch
-                        + 0.01 * static_cast<double>(score.hbt_count);
+    score.objective = 0.0;
+    for (const auto& node : state_result.tree_nodes) {
+        if (node.parent_index < 0) {
+            continue;
+        }
+        score.objective += static_cast<double>(node.incoming_wire_length);
     }
     return score;
 }
@@ -1056,7 +1084,6 @@ bool PDTreeRouter::isBetterScore(const CandidateScore& lhs,
     if (!rhs.valid) {
         return true;
     }
-
     constexpr double kEps = 1e-12;
     if (lhs.objective + kEps < rhs.objective) {
         return true;
@@ -1064,33 +1091,7 @@ bool PDTreeRouter::isBetterScore(const CandidateScore& lhs,
     if (rhs.objective + kEps < lhs.objective) {
         return false;
     }
-
-    if (lhs.avg_sink_delay + kEps < rhs.avg_sink_delay) {
-        return true;
-    }
-    if (rhs.avg_sink_delay + kEps < lhs.avg_sink_delay) {
-        return false;
-    }
-
-    if (lhs.max_sink_delay + kEps < rhs.max_sink_delay) {
-        return true;
-    }
-    if (rhs.max_sink_delay + kEps < lhs.max_sink_delay) {
-        return false;
-    }
-
-    if (lhs.hbt_count != rhs.hbt_count) {
-        return lhs.hbt_count < rhs.hbt_count;
-    }
-
-    if (lhs.total_wirelength + kEps < rhs.total_wirelength) {
-        return true;
-    }
-    if (rhs.total_wirelength + kEps < lhs.total_wirelength) {
-        return false;
-    }
-
-    return lhs.avg_stretch + kEps < rhs.avg_stretch;
+    return false;
 }
 
 PDTreeRouter::TimingSummary PDTreeRouter::evaluateTimingSummary(const Net& net,
@@ -1254,31 +1255,17 @@ std::vector<int> PDTreeRouter::collectCandidateHBTsForSubtree(
 bool PDTreeRouter::optimizeHBTInnerNodesForState(const Net& net,
                                                  PartialRouteState& state) const
 {
-    for (int i = 0; i < static_cast<int>(state.result.tree_nodes.size()); ++i) {
-        TreeNodeState& node = state.result.tree_nodes[i];
-        if (node.node_type != TreeNodeState::NodeType::kHBT) {
-            continue;
-        }
-        const auto ranked = evaluateHBTNodeCandidates(net, state, i);
-        if (ranked.empty()) {
-            continue;
-        }
-        node.assigned_hbt_id = ranked.front();
-        node.hbt_assigned = true;
-        const auto& slot = grid_.hbt.getSlots().at(node.assigned_hbt_id);
-        node.point.x = slot.x;
-        node.point.y = slot.y;
-        node.hbt_res = db_.getHBTResistanceOrDefault();
-        node.hbt_cap = params_.hbt_cap;
-        state.local_reserved_hbts.insert(node.assigned_hbt_id);
-    }
-    return materializeHBTNodesToSegments(net, state);
+    // Deprecated for report-aligned cost. Not used in core routing cost.
+    (void) net;
+    (void) state;
+    return false;
 }
 
 std::vector<int> PDTreeRouter::evaluateHBTNodeCandidates(const Net& /*net*/,
                                                           const PartialRouteState& state,
                                                           int hbt_tree_node) const
 {
+    // Deprecated for report-aligned cost. Not used in core routing cost.
     if (hbt_tree_node < 0 || hbt_tree_node >= static_cast<int>(state.result.tree_nodes.size())) {
         return {};
     }
@@ -1304,6 +1291,7 @@ double PDTreeRouter::estimateHBTNodeCost(const Net& /*net*/,
                                          int hbt_tree_node,
                                          int candidate_hbt_id) const
 {
+    // Deprecated for report-aligned cost. Not used in core routing cost.
     if (candidate_hbt_id < 0 || candidate_hbt_id >= static_cast<int>(grid_.hbt.getSlots().size())) {
         return std::numeric_limits<double>::infinity();
     }
@@ -1325,13 +1313,10 @@ double PDTreeRouter::estimateHBTNodeCost(const Net& /*net*/,
             ++fanout;
         }
     }
-    const double depth_penalty = params_.weight_hbt_depth * static_cast<double>(node.depth);
-    const double stack_penalty = params_.weight_hbt_stack * static_cast<double>(node.hbt_count_from_root);
-    const double fanout_penalty = params_.weight_hbt_fanout * static_cast<double>(fanout);
-    const double scarcity = params_.weight_hbt_scarcity * computeHBTScarcityPenalty(state.local_reserved_hbts, candidate_hbt_id);
-    return params_.weight_hbt_subtree_wire * wl
-         + params_.weight_hbt_subtree_delay_proxy * (db_.getHBTResistanceOrDefault() + 0.5 * params_.hbt_cap)
-         + depth_penalty + stack_penalty + fanout_penalty + scarcity;
+    (void) wl;
+    (void) fanout;
+    (void) state;
+    return static_cast<double>(candidate_hbt_id);
 }
 
 double PDTreeRouter::computeHBTScarcityPenalty(const std::unordered_set<int>& local_reserved_hbts,
@@ -1375,27 +1360,9 @@ bool PDTreeRouter::materializeHBTNodesToSegments(const Net& /*net*/, PartialRout
 double PDTreeRouter::evaluateHBTPositionCost(const Net& /*net*/,
                                              const NetRouteResult& result) const
 {
-    double cost = 0.0;
-    for (int i = 0; i < static_cast<int>(result.tree_nodes.size()); ++i) {
-        const TreeNodeState& n = result.tree_nodes[i];
-        if (n.node_type != TreeNodeState::NodeType::kHBT) {
-            continue;
-        }
-        int fanout = 0;
-        for (const auto& c : result.tree_nodes) {
-            if (c.parent_index == i) {
-                ++fanout;
-            }
-        }
-        const double pos = static_cast<double>(std::abs(n.point.x - result.tree_nodes[result.root_tree_index].point.x)
-                                             + std::abs(n.point.y - result.tree_nodes[result.root_tree_index].point.y));
-        cost += params_.weight_hbt_depth * static_cast<double>(n.depth)
-              + params_.weight_hbt_stack * static_cast<double>(n.hbt_count_from_root)
-              + params_.weight_hbt_fanout * static_cast<double>(fanout)
-              + params_.weight_hbt_scarcity * computeHBTScarcityPenalty({}, n.assigned_hbt_id)
-              + params_.weight_hbt_position * pos;
-    }
-    return cost;
+    // Deprecated for report-aligned cost. Not used in core routing cost.
+    (void) result;
+    return 0.0;
 }
 
 bool PDTreeRouter::build2DManhattanConnection(const RoutedPoint& a,

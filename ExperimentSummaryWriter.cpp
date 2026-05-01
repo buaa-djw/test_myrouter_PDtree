@@ -60,6 +60,16 @@ void writeExperimentSummary(const std::string& path,
     o << "disconnected_3d_nets=" << disconnected_3d_nets << "\n";
     o << "hbt_node_segment_mismatch_nets=" << hbt_node_segment_mismatch_nets << "\n\n";
     o << "config.output.dump_invalid_3d_nets=" << cfg.output.dump_invalid_3d_nets << "\n\n";
+    o << "report_cost.alpha_path_depth=" << cfg.report_cost.alpha_path_depth << "\n";
+    o << "report_cost.stretch_limit=" << cfg.report_cost.stretch_limit << "\n";
+    o << "report_cost.beta_stretch=" << cfg.report_cost.beta_stretch << "\n";
+    o << "report_cost.beta_hbt_depth=" << cfg.report_cost.beta_hbt_depth << "\n";
+    o << "report_cost.beta_hbt_stack=" << cfg.report_cost.beta_hbt_stack << "\n";
+    o << "report_cost.beta_hbt_branch=" << cfg.report_cost.beta_hbt_branch << "\n";
+    o << "report_cost.beta_hbt_rc=" << cfg.report_cost.beta_hbt_rc << "\n";
+    o << "report_cost.beta_cap_load=" << cfg.report_cost.beta_cap_load << "\n";
+    o << "report_cost.max_hbt_per_path=" << cfg.report_cost.max_hbt_per_path << "\n";
+    o << "report_cost.max_hbt_per_net=" << cfg.report_cost.max_hbt_per_net << "\n\n";
 
     o << "Per-net Summary\n";
     for (const auto& r : results) {
