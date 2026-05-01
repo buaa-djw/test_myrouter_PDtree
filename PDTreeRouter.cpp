@@ -1118,88 +1118,76 @@ PDTreeRouter::ReportCostBreakdown PDTreeRouter::computeReportPDCost(
     const RoutedPoint root_point = current_tree.tree_nodes[current_tree.root_tree_index].point;
     const RoutedPoint sink_point = pinToPoint(sink_pin);
 
-    // d_ij: parent-to-candidate attach distance. For cross-die branches the
-    // attach point is the source-side HBT endpoint, and extra_path_after_attach
-    // accounts for the HBT-to-sink same-die segment.
-    cost.dij = static_cast<double>(manhattan(parent.point, attach_point));
-
-    // l_i: source-to-parent path depth in the current PD tree.
-    cost.parent_path_length = static_cast<double>(parent.path_length_from_root);
-    cost.pd_depth_term =
-        params_.report_cost.alpha_path_depth * cost.parent_path_length;
-
-    cost.candidate_path_length =
-        cost.parent_path_length + cost.dij + std::max(0.0, extra_path_after_attach);
-
-    cost.src_to_sink_manhattan =
-        static_cast<double>(manhattan(root_point, sink_point));
-    if (cost.src_to_sink_manhattan < 1.0) {
-        cost.src_to_sink_manhattan = 1.0;
-    }
-
-    const double stretch_limit_length =
-        params_.report_cost.stretch_limit * cost.src_to_sink_manhattan;
-
-    cost.stretch_violation =
-        std::max(0.0, cost.candidate_path_length - stretch_limit_length);
-    cost.stretch_penalty =
-        params_.report_cost.beta_stretch * cost.stretch_violation;
-
+    cost.parent_to_attach_dbu = static_cast<double>(manhattan(parent.point, attach_point));
+    cost.attach_to_sink_dbu = std::max(0.0, extra_path_after_attach);
+    cost.branch_wire_dbu = cost.parent_to_attach_dbu + cost.attach_to_sink_dbu;
+    cost.parent_to_attach_um = db_.dbuToMicronLength(static_cast<int>(cost.parent_to_attach_dbu));
+    cost.attach_to_sink_um = db_.dbuToMicronLength(static_cast<int>(cost.attach_to_sink_dbu));
+    cost.branch_wire_um = cost.parent_to_attach_um + cost.attach_to_sink_um;
+    cost.parent_path_res = parent.path_res_from_root;
+    cost.parent_path_cap = parent.path_cap_from_root;
+    cost.parent_path_delay = parent.path_delay_from_root;
     cost.sink_cap = sink_pin.has_input_cap
                         ? sink_pin.input_cap
                         : params_.default_sink_cap;
-    cost.cap_penalty =
-        params_.report_cost.beta_cap_load
-        * cost.sink_cap
-        * cost.candidate_path_length;
+    const EffectiveRC rc1 = db_.computeDirectionalRCForDie(parent.point.die, true);
+    const EffectiveRC rc2 = db_.computeDirectionalRCForDie(sink_point.die, true);
+    cost.wire_res_parent_to_attach = rc1.unit_res * cost.parent_to_attach_um;
+    cost.wire_cap_parent_to_attach = rc1.unit_cap * cost.parent_to_attach_um;
+    cost.wire_res_attach_to_sink = rc2.unit_res * cost.attach_to_sink_um;
+    cost.wire_cap_attach_to_sink = rc2.unit_cap * cost.attach_to_sink_um;
 
     if (introduces_hbt) {
         if (hbt_id < 0 || hbt_id >= static_cast<int>(grid_.hbt.getSlots().size())) {
             return cost;
         }
 
-        const int hbt_count_after = parent.hbt_count_from_root + 1;
+        cost.current_net_hbt_count = countHBTSegments(current_tree);
+        cost.net_hbt_count_after = cost.current_net_hbt_count + 1;
+        cost.path_hbt_count_after = parent.hbt_count_from_root + 1;
         if (params_.report_cost.max_hbt_per_path > 0
-            && hbt_count_after > params_.report_cost.max_hbt_per_path) {
+            && cost.path_hbt_count_after > params_.report_cost.max_hbt_per_path) {
             return cost;
         }
-
         if (params_.report_cost.max_hbt_per_net > 0
-            && countHBTSegments(current_tree) >= params_.report_cost.max_hbt_per_net) {
+            && cost.current_net_hbt_count >= params_.report_cost.max_hbt_per_net) {
             return cost;
         }
-
-        const int parent_degree = countTreeNodeChildren(current_tree, parent_tree_index);
-
-        // Phi_HBT(i, j): explicit HBT-aware penalty from the report.
-        cost.hbt_depth_penalty =
-            params_.report_cost.beta_hbt_depth * cost.parent_path_length;
-
-        cost.hbt_stack_penalty =
-            params_.report_cost.beta_hbt_stack
-            * static_cast<double>(hbt_count_after * hbt_count_after);
-
-        cost.hbt_branch_penalty =
-            params_.report_cost.beta_hbt_branch
-            * static_cast<double>(parent_degree + 1);
-
-        cost.hbt_rc_penalty =
-            params_.report_cost.beta_hbt_rc
-            * (params_.hbt_res * cost.sink_cap + params_.hbt_cap);
-
-        cost.hbt_penalty =
-            cost.hbt_depth_penalty
-            + cost.hbt_stack_penalty
-            + cost.hbt_branch_penalty
-            + cost.hbt_rc_penalty;
+        cost.hbt_res = params_.hbt_res;
+        cost.hbt_cap = params_.hbt_cap;
+        cost.parent_load_delay = cost.parent_path_res * (cost.wire_cap_parent_to_attach + cost.hbt_cap + cost.wire_cap_attach_to_sink + cost.sink_cap);
+        cost.wire_delay = 0.5 * cost.wire_res_parent_to_attach * cost.wire_cap_parent_to_attach
+                        + cost.wire_res_parent_to_attach * (cost.hbt_cap + cost.wire_cap_attach_to_sink + cost.sink_cap)
+                        + 0.5 * cost.wire_res_attach_to_sink * cost.wire_cap_attach_to_sink
+                        + cost.wire_res_attach_to_sink * cost.sink_cap;
+        cost.hbt_rc_delay = cost.hbt_res * (cost.wire_cap_attach_to_sink + cost.sink_cap) + 0.5 * cost.hbt_res * cost.hbt_cap;
+        cost.hbt_unit_delay = cost.hbt_res * (cost.hbt_cap + cost.sink_cap);
+        if (cost.hbt_unit_delay < 1e-12) cost.hbt_unit_delay = params_.report_cost.hbt_unit_delay_scale;
+        cost.hbt_net_penalty_delay = cost.hbt_unit_delay * params_.report_cost.hbt_net_penalty_scale * cost.net_hbt_count_after;
+        cost.hbt_net_quad_penalty_delay = cost.hbt_unit_delay * params_.report_cost.hbt_net_quad_penalty_scale * cost.net_hbt_count_after * cost.net_hbt_count_after;
+        cost.hbt_path_penalty_delay = cost.hbt_unit_delay * params_.report_cost.hbt_path_penalty_scale * cost.path_hbt_count_after * cost.path_hbt_count_after;
+    } else {
+        cost.parent_load_delay = cost.parent_path_res * (cost.wire_cap_parent_to_attach + cost.sink_cap);
+        cost.wire_delay = 0.5 * cost.wire_res_parent_to_attach * cost.wire_cap_parent_to_attach
+                        + cost.wire_res_parent_to_attach * cost.sink_cap;
     }
-
-    cost.total =
-        cost.dij
-        + cost.pd_depth_term
-        + cost.stretch_penalty
-        + cost.hbt_penalty
-        + cost.cap_penalty;
+    const double source_to_sink_dbu = std::max(1.0, static_cast<double>(manhattan(root_point, sink_point)));
+    const double candidate_path_dbu = static_cast<double>(parent.path_length_from_root) + cost.branch_wire_dbu;
+    const double stretch_ratio = candidate_path_dbu / source_to_sink_dbu;
+    if (stretch_ratio > params_.report_cost.stretch_limit) {
+        cost.stretch_penalty_delay = (stretch_ratio - params_.report_cost.stretch_limit)
+                                   * (cost.wire_delay + cost.parent_load_delay + cost.hbt_rc_delay);
+    }
+    cost.weighted_wire_delay = params_.report_cost.coef_wire_delay * cost.wire_delay;
+    cost.weighted_parent_load_delay = params_.report_cost.coef_parent_load_delay * cost.parent_load_delay;
+    cost.weighted_hbt_rc_delay = params_.report_cost.coef_hbt_rc_delay * cost.hbt_rc_delay;
+    cost.weighted_hbt_net_penalty = params_.report_cost.coef_hbt_net_penalty * cost.hbt_net_penalty_delay;
+    cost.weighted_hbt_net_quad_penalty = params_.report_cost.coef_hbt_net_quad_penalty * cost.hbt_net_quad_penalty_delay;
+    cost.weighted_hbt_path_penalty = params_.report_cost.coef_hbt_path_penalty * cost.hbt_path_penalty_delay;
+    cost.weighted_stretch_penalty = params_.report_cost.coef_stretch_penalty * cost.stretch_penalty_delay;
+    cost.total = cost.weighted_wire_delay + cost.weighted_parent_load_delay + cost.weighted_hbt_rc_delay
+               + cost.weighted_hbt_net_penalty + cost.weighted_hbt_net_quad_penalty
+               + cost.weighted_hbt_path_penalty + cost.weighted_stretch_penalty;
 
     cost.valid = true;
     return cost;
@@ -1248,20 +1236,33 @@ PDTreeRouter::CandidateScore PDTreeRouter::scoreAttachmentCandidate(
                 << introduces_hbt << ','
                 << hbt_id << ','
                 << score.cost.total << ','
-                << score.cost.dij << ','
-                << score.cost.parent_path_length << ','
-                << score.cost.pd_depth_term << ','
-                << score.cost.candidate_path_length << ','
-                << score.cost.src_to_sink_manhattan << ','
-                << score.cost.stretch_violation << ','
-                << score.cost.stretch_penalty << ','
-                << score.cost.hbt_depth_penalty << ','
-                << score.cost.hbt_stack_penalty << ','
-                << score.cost.hbt_branch_penalty << ','
-                << score.cost.hbt_rc_penalty << ','
-                << score.cost.hbt_penalty << ','
+                << score.cost.parent_to_attach_dbu << ','
+                << score.cost.attach_to_sink_dbu << ','
+                << score.cost.branch_wire_dbu << ','
+                << score.cost.parent_to_attach_um << ','
+                << score.cost.attach_to_sink_um << ','
+                << score.cost.branch_wire_um << ','
+                << score.cost.parent_path_res << ','
+                << score.cost.parent_path_cap << ','
                 << score.cost.sink_cap << ','
-                << score.cost.cap_penalty << '\n';
+                << score.cost.wire_res_parent_to_attach << ','
+                << score.cost.wire_cap_parent_to_attach << ','
+                << score.cost.wire_res_attach_to_sink << ','
+                << score.cost.wire_cap_attach_to_sink << ','
+                << score.cost.wire_delay << ','
+                << score.cost.parent_load_delay << ','
+                << score.cost.hbt_rc_delay << ','
+                << score.cost.hbt_net_penalty_delay << ','
+                << score.cost.hbt_net_quad_penalty_delay << ','
+                << score.cost.hbt_path_penalty_delay << ','
+                << score.cost.stretch_penalty_delay << ','
+                << score.cost.weighted_wire_delay << ','
+                << score.cost.weighted_parent_load_delay << ','
+                << score.cost.weighted_hbt_rc_delay << ','
+                << score.cost.weighted_hbt_net_penalty << ','
+                << score.cost.weighted_hbt_net_quad_penalty << ','
+                << score.cost.weighted_hbt_path_penalty << ','
+                << score.cost.weighted_stretch_penalty << '\n';
         }
     }
 
@@ -1794,6 +1795,9 @@ bool PDTreeRouter::commitCrossDieBranch(NetRouteResult& result,
     hbt_node.depth = p.depth + 1;
     hbt_node.path_length_from_root = p.path_length_from_root;
     hbt_node.hbt_count_from_root = p.hbt_count_from_root + 1;
+    hbt_node.path_res_from_root = p.path_res_from_root + params_.hbt_res;
+    hbt_node.path_cap_from_root = p.path_cap_from_root + params_.hbt_cap;
+    hbt_node.path_delay_from_root = p.path_delay_from_root + 0.5 * params_.hbt_res * params_.hbt_cap;
     result.tree_nodes.push_back(hbt_node);
     const int hbt_node_index = static_cast<int>(result.tree_nodes.size()) - 1;
 
@@ -1880,6 +1884,9 @@ bool PDTreeRouter::commit3DBranchWithHBTNode(NetRouteResult& result,
     hbt_node.depth = p.depth + 1;
     hbt_node.path_length_from_root = p.path_length_from_root;
     hbt_node.hbt_count_from_root = p.hbt_count_from_root + 1;
+    hbt_node.path_res_from_root = p.path_res_from_root + params_.hbt_res;
+    hbt_node.path_cap_from_root = p.path_cap_from_root + params_.hbt_cap;
+    hbt_node.path_delay_from_root = p.path_delay_from_root + 0.5 * params_.hbt_res * params_.hbt_cap;
     result.tree_nodes.push_back(hbt_node);
     const int hbt_tree_idx = static_cast<int>(result.tree_nodes.size()) - 1;
 
@@ -1944,6 +1951,9 @@ void PDTreeRouter::commitSegments(NetRouteResult& result,
 
     n.path_length_from_root = p.path_length_from_root + n.incoming_wire_length;
     n.hbt_count_from_root = p.hbt_count_from_root + n.incoming_hbt_count;
+    n.path_res_from_root = p.path_res_from_root + n.incoming_wire_res + n.incoming_hbt_res;
+    n.path_cap_from_root = p.path_cap_from_root + n.incoming_wire_cap + n.incoming_hbt_cap;
+    n.path_delay_from_root = p.path_delay_from_root + n.path_res_from_root * (n.incoming_wire_cap + n.incoming_hbt_cap);
 
     result.tree_nodes.push_back(n);
 }

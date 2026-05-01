@@ -43,6 +43,9 @@ struct TreeNodeState
     int depth = 0;
     int path_length_from_root = 0;
     int hbt_count_from_root = 0;
+    double path_res_from_root = 0.0;
+    double path_cap_from_root = 0.0;
+    double path_delay_from_root = 0.0;
 
     // Branch statistics from parent -> this node.
     // These fields are populated when commitSegments() appends this sink branch.
@@ -127,27 +130,23 @@ public:
         int skipped_special = 0;
     };
 
-    // Report-aligned PD-tree cost parameters.
-    // The core candidate formula is:
-    //   Cost(i, j) = d_ij + alpha * l_i
-    //              + StretchPenalty(i, j)
-    //              + Phi_HBT(i, j)
-    //              + CapPenalty(i, j)
     struct ReportCostParams {
-        double alpha_path_depth = 0.5;
+        double coef_wire_delay = 1.0;
+        double coef_parent_load_delay = 1.0;
+        double coef_hbt_rc_delay = 1.0;
+        double coef_hbt_net_penalty = 1.0;
+        double coef_hbt_net_quad_penalty = 1.0;
+        double coef_hbt_path_penalty = 0.1;
+        double coef_stretch_penalty = 0.2;
+        double hbt_unit_delay_scale = 1.0;
+        double hbt_net_penalty_scale = 1.0;
+        double hbt_net_quad_penalty_scale = 1.0;
+        double hbt_path_penalty_scale = 1.0;
         double stretch_limit = 1.5;
-        double beta_stretch = 1.0;
-
-        double beta_hbt_depth = 1.0;
-        double beta_hbt_stack = 1.0;
-        double beta_hbt_branch = 1.0;
-        double beta_hbt_rc = 1.0;
-
-        double beta_cap_load = 1.0;
-
-        // 0 means unlimited. A positive value is treated as a hard constraint.
-        int max_hbt_per_path = 2;
-        int max_hbt_per_net = 0;
+        int max_hbt_per_path = 1;
+        int max_hbt_per_net = 2;
+        double default_wire_res_per_um = 0.1;
+        double default_wire_cap_per_um = 0.0002;
     };
 
     struct Params {
@@ -210,23 +209,41 @@ private:
         bool valid = false;
         double total = 0.0;
 
-        double dij = 0.0;
-        double parent_path_length = 0.0;
-        double pd_depth_term = 0.0;
-
-        double candidate_path_length = 0.0;
-        double src_to_sink_manhattan = 0.0;
-        double stretch_violation = 0.0;
-        double stretch_penalty = 0.0;
-
-        double hbt_depth_penalty = 0.0;
-        double hbt_stack_penalty = 0.0;
-        double hbt_branch_penalty = 0.0;
-        double hbt_rc_penalty = 0.0;
-        double hbt_penalty = 0.0;
-
+        double parent_to_attach_dbu = 0.0;
+        double attach_to_sink_dbu = 0.0;
+        double branch_wire_dbu = 0.0;
+        double parent_to_attach_um = 0.0;
+        double attach_to_sink_um = 0.0;
+        double branch_wire_um = 0.0;
+        double parent_path_res = 0.0;
+        double parent_path_cap = 0.0;
+        double parent_path_delay = 0.0;
+        double wire_res_parent_to_attach = 0.0;
+        double wire_cap_parent_to_attach = 0.0;
+        double wire_res_attach_to_sink = 0.0;
+        double wire_cap_attach_to_sink = 0.0;
         double sink_cap = 0.0;
-        double cap_penalty = 0.0;
+        double added_cap = 0.0;
+        double wire_delay = 0.0;
+        double parent_load_delay = 0.0;
+        double hbt_rc_delay = 0.0;
+        double hbt_net_penalty_delay = 0.0;
+        double hbt_net_quad_penalty_delay = 0.0;
+        double hbt_path_penalty_delay = 0.0;
+        double stretch_penalty_delay = 0.0;
+        double hbt_res = 0.0;
+        double hbt_cap = 0.0;
+        double hbt_unit_delay = 0.0;
+        int current_net_hbt_count = 0;
+        int net_hbt_count_after = 0;
+        int path_hbt_count_after = 0;
+        double weighted_wire_delay = 0.0;
+        double weighted_parent_load_delay = 0.0;
+        double weighted_hbt_rc_delay = 0.0;
+        double weighted_hbt_net_penalty = 0.0;
+        double weighted_hbt_net_quad_penalty = 0.0;
+        double weighted_hbt_path_penalty = 0.0;
+        double weighted_stretch_penalty = 0.0;
     };
 
     struct CandidateScore {
