@@ -127,26 +127,59 @@ public:
         int skipped_special = 0;
     };
 
-    struct ReportCostParams
-    {
+    // Report-aligned PD-tree cost parameters.
+    // The core candidate formula is:
+    //   Cost(i, j) = d_ij + alpha * l_i
+    //              + StretchPenalty(i, j)
+    //              + Phi_HBT(i, j)
+    //              + CapPenalty(i, j)
+    struct ReportCostParams {
         double alpha_path_depth = 0.5;
         double stretch_limit = 1.5;
         double beta_stretch = 1.0;
+
         double beta_hbt_depth = 1.0;
         double beta_hbt_stack = 1.0;
         double beta_hbt_branch = 1.0;
         double beta_hbt_rc = 1.0;
+
         double beta_cap_load = 1.0;
+
+        // 0 means unlimited. A positive value is treated as a hard constraint.
         int max_hbt_per_path = 2;
         int max_hbt_per_net = 0;
     };
 
     struct Params {
+        // Driver/source lumped resistance (Ohm-equivalent proxy in current model units).
         double source_res = 50.0;
+
+        // Vertical HBT RC proxy per crossing.
         double hbt_res = 5.0;
         double hbt_cap = 0.001;
+
+        // Default sink pin capacitance when no explicit pin cap is available.
         double default_sink_cap = 0.001;
+
+        // Core routing cost. EDCompute is intentionally not used for candidate
+        // selection; it is only used for final report delay annotation.
         ReportCostParams report_cost;
+
+        // Deprecated legacy objective weights. They are kept only so older
+        // configuration/main.cpp assignments do not break compilation. They are
+        // not used by the core routing cost path.
+        double weight_avg_delay = 1.0;
+        double weight_max_delay = 0.10;
+        double weight_wirelength = 1e-5;
+        double weight_hbt_count = 0.05;
+        double weight_stretch = 1e-5;
+        double weight_hbt_depth = 0.01;
+        double weight_hbt_stack = 0.03;
+        double weight_hbt_fanout = 0.01;
+        double weight_hbt_scarcity = 0.02;
+        double weight_hbt_position = 1e-5;
+        double weight_hbt_subtree_wire = 1e-5;
+        double weight_hbt_subtree_delay_proxy = 0.03;
 
         int max_hbt_search_radius = 0;  // 0 => auto
         int max_candidate_parents = 64;
@@ -157,6 +190,7 @@ public:
         int max_hbt_nearest_k = 16;
 
         bool enable_hbt_inner_node_optimization = false;
+        bool use_proposed_cost = true;
         bool dump_candidate_cost_debug = false;
 
         bool verbose = true;
@@ -175,18 +209,22 @@ private:
     struct ReportCostBreakdown {
         bool valid = false;
         double total = 0.0;
+
         double dij = 0.0;
         double parent_path_length = 0.0;
         double pd_depth_term = 0.0;
+
         double candidate_path_length = 0.0;
         double src_to_sink_manhattan = 0.0;
         double stretch_violation = 0.0;
         double stretch_penalty = 0.0;
+
         double hbt_depth_penalty = 0.0;
         double hbt_stack_penalty = 0.0;
         double hbt_branch_penalty = 0.0;
         double hbt_rc_penalty = 0.0;
         double hbt_penalty = 0.0;
+
         double sink_cap = 0.0;
         double cap_penalty = 0.0;
     };
@@ -195,6 +233,10 @@ private:
         bool valid = false;
         double objective = 0.0;
         ReportCostBreakdown cost;
+
+        // Tie-break/debug fields. These do not define the primary cost.
+        int hbt_count = 0;
+        double total_wirelength = 0.0;
     };
 
     struct PartialRouteState {
@@ -287,20 +329,27 @@ private:
                                    DieId to_die,
                                    int assigned_hbt_id) const;
 
+    ReportCostBreakdown computeReportPDCost(const Net& net,
+                                             const NetRouteResult& current_tree,
+                                             int parent_tree_index,
+                                             int sink_pin_index,
+                                             const RoutedPoint& attach_point,
+                                             bool introduces_hbt,
+                                             int hbt_id,
+                                             double extra_path_after_attach = 0.0) const;
+
     CandidateScore scoreAttachmentCandidate(const Net& net,
                                             const NetRouteResult& current,
                                             const std::vector<RoutedSegment>& candidate_segs,
                                             int sink_pin_index,
                                             int parent_tree_index,
                                             const RoutedPoint& sink_attach_point,
-                                            int extra_hbt_count) const;
-    ReportCostBreakdown computeReportPDCost(const Net& net,
-                                           const NetRouteResult& current_tree,
-                                           int parent_tree_index,
-                                           int sink_pin_index,
-                                           const RoutedPoint& attach_point,
-                                           bool introduces_hbt,
-                                           int hbt_id) const;
+                                            int extra_hbt_count,
+                                            double extra_path_after_attach = 0.0,
+                                            int hbt_id = -1) const;
+
+    // Deprecated compatibility function. Core routing uses accumulated
+    // report-aligned PD cost, not a post-commit EDCompute objective.
     CandidateScore evaluateStateScore(const Net& net, const NetRouteResult& state_result) const;
 
     bool isBetterScore(const CandidateScore& lhs,
