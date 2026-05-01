@@ -163,6 +163,10 @@ public:
         int max_local_hbt_candidates = 24;
         int max_hbt_nearest_k = 16;
 
+        bool enable_hbt_inner_node_optimization = false;
+        bool use_proposed_cost = true;
+        bool dump_candidate_cost_debug = false;
+
         bool verbose = true;
     };
 
@@ -237,6 +241,11 @@ private:
                             DieId net_route_die,
                             NetRouteResult& result,
                             std::vector<bool>& in_tree);
+
+    bool commitCrossDieBranch(NetRouteResult& result,
+                             int parent_tree_index,
+                             int sink_pin_index,
+                             int assigned_hbt_id) const;
 
     bool connectSinkCrossDie(const Net& net,
                              int sink_pin_index,

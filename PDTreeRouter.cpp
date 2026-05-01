@@ -673,24 +673,16 @@ std::vector<PDTreeRouter::PartialRouteState> PDTreeRouter::expandSinkCrossDieCan
         }
         int emitted = 0;
         for (int hid : hbts) {
-            const auto& hs = grid_.hbt.getSlots().at(hid);
-            RoutedPoint h_parent{hs.x, hs.y, normalizeDie(parent_pt.die)};
-            RoutedPoint h_sink{hs.x, hs.y, normalizeDie(sink_pt.die)};
-            std::vector<RoutedSegment> seg1;
-            std::vector<RoutedSegment> seg2;
-            if (!build2DManhattanConnection(parent_pt, h_parent, seg1)
-                || !build2DManhattanConnection(h_sink, sink_pt, seg2)) {
-                continue;
-            }
             PartialRouteState next = state;
-            if (!commit3DBranchWithHBTNode(next.result, sink_pin_index, tidx, -1, seg1, seg2, h_parent, sink_pt, hbts,
-                                           normalizeDie(parent_pt.die), normalizeDie(sink_pt.die), hid)) {
+            if (!commitCrossDieBranch(next.result, tidx, sink_pin_index, hid)) {
                 continue;
             }
             next.local_reserved_hbts.insert(hid);
             next.in_tree[sink_pin_index] = true;
             next.attached_sinks += 1;
-            (void) optimizeHBTInnerNodesForState(net, next);
+            if (params_.enable_hbt_inner_node_optimization) {
+                (void) optimizeHBTInnerNodesForState(net, next);
+            }
             next.score = evaluateStateScore(net, next.result);
             out.push_back(std::move(next));
             ++emitted;
@@ -1003,12 +995,27 @@ PDTreeRouter::CandidateScore PDTreeRouter::scoreAttachmentCandidate(
     score.avg_stretch = t.avg_stretch;
 
     score.hbt_position_cost = evaluateHBTPositionCost(net, tmp);
-    score.objective = params_.weight_avg_delay * score.avg_sink_delay
-                    + params_.weight_max_delay * score.max_sink_delay
-                    + params_.weight_hbt_count * static_cast<double>(score.hbt_count)
-                    + params_.weight_wirelength * score.total_wirelength
-                    + params_.weight_stretch * score.avg_stretch
-                    + score.hbt_position_cost;
+    if (params_.use_proposed_cost) {
+        score.objective = params_.weight_avg_delay * score.avg_sink_delay
+                        + params_.weight_max_delay * score.max_sink_delay
+                        + params_.weight_hbt_count * static_cast<double>(score.hbt_count)
+                        + params_.weight_wirelength * score.total_wirelength
+                        + params_.weight_stretch * score.avg_stretch
+                        + score.hbt_position_cost
+                        + params_.hbt_res * 1e-3 * static_cast<double>(score.hbt_count);
+    } else {
+        score.objective = params_.weight_wirelength * score.total_wirelength
+                        + params_.weight_stretch * score.avg_stretch
+                        + 0.01 * static_cast<double>(score.hbt_count);
+    }
+    if (params_.dump_candidate_cost_debug) {
+        std::ofstream ofs("candidate_cost_debug.csv", std::ios::app);
+        if (ofs) {
+            ofs << net.name << "," << sink_pin_index << "," << parent_tree_index << ","
+                << score.objective << "," << score.avg_sink_delay << "," << score.max_sink_delay << ","
+                << score.total_wirelength << "," << score.hbt_count << "," << score.hbt_position_cost << "\n";
+        }
+    }
     return score;
 }
 
@@ -1024,12 +1031,19 @@ PDTreeRouter::CandidateScore PDTreeRouter::evaluateStateScore(const Net& net,
     score.total_wirelength = t.total_wirelength;
     score.avg_stretch = t.avg_stretch;
     score.hbt_position_cost = evaluateHBTPositionCost(net, state_result);
-    score.objective = params_.weight_avg_delay * score.avg_sink_delay
-                    + params_.weight_max_delay * score.max_sink_delay
-                    + params_.weight_hbt_count * static_cast<double>(score.hbt_count)
-                    + params_.weight_wirelength * score.total_wirelength
-                    + params_.weight_stretch * score.avg_stretch
-                    + score.hbt_position_cost;
+    if (params_.use_proposed_cost) {
+        score.objective = params_.weight_avg_delay * score.avg_sink_delay
+                        + params_.weight_max_delay * score.max_sink_delay
+                        + params_.weight_hbt_count * static_cast<double>(score.hbt_count)
+                        + params_.weight_wirelength * score.total_wirelength
+                        + params_.weight_stretch * score.avg_stretch
+                        + score.hbt_position_cost
+                        + params_.hbt_res * 1e-3 * static_cast<double>(score.hbt_count);
+    } else {
+        score.objective = params_.weight_wirelength * score.total_wirelength
+                        + params_.weight_stretch * score.avg_stretch
+                        + 0.01 * static_cast<double>(score.hbt_count);
+    }
     return score;
 }
 
@@ -1140,7 +1154,22 @@ std::vector<int> PDTreeRouter::collectCandidateParents(const Net& /*net*/,
     dist_idx.reserve(result.tree_nodes.size());
 
     for (int i = 0; i < static_cast<int>(result.tree_nodes.size()); ++i) {
-        const auto& p = result.tree_nodes[i].point;
+        const auto& node = result.tree_nodes[i];
+        if (node.node_type == TreeNodeState::NodeType::kHBT) {
+            const auto& slots = grid_.hbt.getSlots();
+            if (node.assigned_hbt_id < 0 || node.assigned_hbt_id >= static_cast<int>(slots.size())) {
+                continue;
+            }
+            const auto& slot = slots[node.assigned_hbt_id];
+            bool matched = false;
+            for (const auto& seg : result.segments) {
+                if (seg.uses_hbt && seg.hbt_id == node.assigned_hbt_id && seg.p1.x == slot.x && seg.p1.y == slot.y) { matched = true; break; }
+            }
+            if (!matched || node.point.x != slot.x || node.point.y != slot.y) {
+                continue;
+            }
+        }
+        const auto& p = node.point;
         const int d = manhattan(p.x, p.y, sink.x, sink.y);
         dist_idx.push_back({d, i});
     }
@@ -1463,6 +1492,92 @@ bool PDTreeRouter::build3DConnectionViaHBT(const RoutedPoint& parent_pt,
     out_segments.push_back(vertical);
 
     out_segments.insert(out_segments.end(), seg2.begin(), seg2.end());
+    return true;
+}
+
+bool PDTreeRouter::commitCrossDieBranch(NetRouteResult& result,
+                                        int parent_tree_index,
+                                        int sink_pin_index,
+                                        int assigned_hbt_id) const
+{
+    const int seg_checkpoint = static_cast<int>(result.segments.size());
+    const int node_checkpoint = static_cast<int>(result.tree_nodes.size());
+    auto rollback = [&]() {
+        result.segments.resize(seg_checkpoint);
+        result.tree_nodes.resize(node_checkpoint);
+    };
+
+    if (parent_tree_index < 0 || parent_tree_index >= node_checkpoint) {
+        return false;
+    }
+    const auto& slots = grid_.hbt.getSlots();
+    if (assigned_hbt_id < 0 || assigned_hbt_id >= static_cast<int>(slots.size())) {
+        return false;
+    }
+    const Net* net_ptr = nullptr;
+    for (const auto& n : db_.nets) {
+        if (n.name == result.net_name) {
+            net_ptr = &n;
+            break;
+        }
+    }
+    if (net_ptr == nullptr || sink_pin_index < 0 || sink_pin_index >= static_cast<int>(net_ptr->pins.size())) {
+        return false;
+    }
+
+    const RoutedPoint parent_pt = result.tree_nodes[parent_tree_index].point;
+    const RoutedPoint sink_pt = pinToPoint(net_ptr->pins[sink_pin_index]);
+    const DieId parent_die = normalizeDie(parent_pt.die);
+    const DieId sink_die = normalizeDie(sink_pt.die);
+    if (parent_die == sink_die) {
+        return false;
+    }
+    const auto& slot = slots[assigned_hbt_id];
+    const RoutedPoint hbt_from{slot.x, slot.y, parent_die};
+    const RoutedPoint hbt_to{slot.x, slot.y, sink_die};
+
+    std::vector<RoutedSegment> parent_to_hbt;
+    std::vector<RoutedSegment> hbt_to_sink;
+    if (!build2DManhattanConnection(parent_pt, hbt_from, parent_to_hbt)
+        || !build2DManhattanConnection(hbt_to, sink_pt, hbt_to_sink)) {
+        rollback();
+        return false;
+    }
+
+    const int seg_begin_hbt = static_cast<int>(result.segments.size());
+    result.segments.insert(result.segments.end(), parent_to_hbt.begin(), parent_to_hbt.end());
+    RoutedSegment vertical;
+    vertical.p1 = hbt_from;
+    vertical.p2 = hbt_to;
+    vertical.uses_hbt = true;
+    vertical.hbt_id = assigned_hbt_id;
+    result.segments.push_back(vertical);
+
+    TreeNodeState hbt_node;
+    hbt_node.node_type = TreeNodeState::NodeType::kHBT;
+    hbt_node.point = hbt_to;
+    hbt_node.assigned_hbt_id = assigned_hbt_id;
+    hbt_node.hbt_assigned = true;
+    hbt_node.parent_index = parent_tree_index;
+    hbt_node.hbt_from_die = parent_die;
+    hbt_node.hbt_to_die = sink_die;
+    hbt_node.incoming_hbt_count = 1;
+    hbt_node.incoming_hbt_res = params_.hbt_res;
+    hbt_node.incoming_hbt_cap = params_.hbt_cap;
+    hbt_node.incoming_segment_begin = seg_begin_hbt;
+    hbt_node.incoming_segment_count = static_cast<int>(parent_to_hbt.size()) + 1;
+    const TreeNodeState& p = result.tree_nodes[parent_tree_index];
+    hbt_node.depth = p.depth + 1;
+    hbt_node.path_length_from_root = p.path_length_from_root;
+    hbt_node.hbt_count_from_root = p.hbt_count_from_root + 1;
+    result.tree_nodes.push_back(hbt_node);
+    const int hbt_node_index = static_cast<int>(result.tree_nodes.size()) - 1;
+
+    commitSegments(result, hbt_to_sink, sink_pin_index, hbt_node_index, sink_pt, 0);
+    if (result.tree_nodes.size() <= static_cast<size_t>(hbt_node_index + 1)) {
+        rollback();
+        return false;
+    }
     return true;
 }
 
