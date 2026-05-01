@@ -65,6 +65,24 @@ void appendPDRouteDebugLine(const std::string& line)
     ofs << line << '\n';
 }
 
+int countTreeNodeChildren(const NetRouteResult& result, int parent_tree_index)
+{
+    if (parent_tree_index < 0
+        || parent_tree_index >= static_cast<int>(result.tree_nodes.size())) {
+        return 0;
+    }
+
+    int child_count = 0;
+
+    for (const TreeNodeState& node : result.tree_nodes) {
+        if (node.parent_index == parent_tree_index) {
+            ++child_count;
+        }
+    }
+
+    return child_count;
+}
+
 }  // namespace
 
 PDTreeRouter::PDTreeRouter(const RouterDB& db,
