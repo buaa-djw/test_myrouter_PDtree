@@ -44,16 +44,22 @@ bool ExperimentConfig::loadFromFile(const std::string& p, ExperimentConfig& c, s
     }
     if (j.contains("report_cost")) {
         auto& rc = j["report_cost"];
-        c.report_cost.alpha_path_depth = gd(rc, "alpha_path_depth", c.report_cost.alpha_path_depth);
+        c.report_cost.coef_wire_delay = gd(rc, "coef_wire_delay", c.report_cost.coef_wire_delay);
+        c.report_cost.coef_parent_load_delay = gd(rc, "coef_parent_load_delay", c.report_cost.coef_parent_load_delay);
+        c.report_cost.coef_hbt_rc_delay = gd(rc, "coef_hbt_rc_delay", c.report_cost.coef_hbt_rc_delay);
+        c.report_cost.coef_hbt_net_penalty = gd(rc, "coef_hbt_net_penalty", c.report_cost.coef_hbt_net_penalty);
+        c.report_cost.coef_hbt_net_quad_penalty = gd(rc, "coef_hbt_net_quad_penalty", c.report_cost.coef_hbt_net_quad_penalty);
+        c.report_cost.coef_hbt_path_penalty = gd(rc, "coef_hbt_path_penalty", c.report_cost.coef_hbt_path_penalty);
+        c.report_cost.coef_stretch_penalty = gd(rc, "coef_stretch_penalty", c.report_cost.coef_stretch_penalty);
+        c.report_cost.hbt_unit_delay_scale = gd(rc, "hbt_unit_delay_scale", c.report_cost.hbt_unit_delay_scale);
+        c.report_cost.hbt_net_penalty_scale = gd(rc, "hbt_net_penalty_scale", c.report_cost.hbt_net_penalty_scale);
+        c.report_cost.hbt_net_quad_penalty_scale = gd(rc, "hbt_net_quad_penalty_scale", c.report_cost.hbt_net_quad_penalty_scale);
+        c.report_cost.hbt_path_penalty_scale = gd(rc, "hbt_path_penalty_scale", c.report_cost.hbt_path_penalty_scale);
         c.report_cost.stretch_limit = gd(rc, "stretch_limit", c.report_cost.stretch_limit);
-        c.report_cost.beta_stretch = gd(rc, "beta_stretch", c.report_cost.beta_stretch);
-        c.report_cost.beta_hbt_depth = gd(rc, "beta_hbt_depth", c.report_cost.beta_hbt_depth);
-        c.report_cost.beta_hbt_stack = gd(rc, "beta_hbt_stack", c.report_cost.beta_hbt_stack);
-        c.report_cost.beta_hbt_branch = gd(rc, "beta_hbt_branch", c.report_cost.beta_hbt_branch);
-        c.report_cost.beta_hbt_rc = gd(rc, "beta_hbt_rc", c.report_cost.beta_hbt_rc);
-        c.report_cost.beta_cap_load = gd(rc, "beta_cap_load", c.report_cost.beta_cap_load);
         c.report_cost.max_hbt_per_path = gi(rc, "max_hbt_per_path", c.report_cost.max_hbt_per_path);
         c.report_cost.max_hbt_per_net = gi(rc, "max_hbt_per_net", c.report_cost.max_hbt_per_net);
+        c.report_cost.default_wire_res_per_um = gd(rc, "default_wire_res_per_um", c.report_cost.default_wire_res_per_um);
+        c.report_cost.default_wire_cap_per_um = gd(rc, "default_wire_cap_per_um", c.report_cost.default_wire_cap_per_um);
     }
     if (j.contains("cost_weights")) {
         std::cerr << "[config] deprecated old objective weight ignored\n";
