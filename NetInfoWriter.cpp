@@ -25,11 +25,28 @@ void writeNetInfo(const std::string& path, const RouterDB&, const std::vector<Ne
 {
     std::ofstream o(path);
     for (const auto& r : results) {
+        double route_cost_total = 0.0;
+        double wirelength = 0.0;
+        int hbt_count = 0;
+        for (const auto& n : r.tree_nodes) {
+            route_cost_total += static_cast<double>(n.incoming_wire_length);
+        }
+        for (const auto& s : r.segments) {
+            wirelength += std::abs(s.p1.x - s.p2.x) + std::abs(s.p1.y - s.p2.y);
+            if (s.uses_hbt) {
+                hbt_count++;
+            }
+        }
         o << "NET " << r.net_name << "\n";
         o << "  type: " << (r.is_3d ? "3D" : "2D") << "\n";
         o << "  success: " << r.success << "\n";
         o << "  status: " << r.status << "\n";
         o << "  fail_reason: " << r.fail_reason << "\n";
+        o << "  route_cost_total: " << route_cost_total << "\n";
+        o << "  hbt_count: " << hbt_count << "\n";
+        o << "  wirelength: " << wirelength << "\n";
+        o << "  avg_sink_delay: " << r.delay_summary.avg_sink_delay << "\n";
+        o << "  max_sink_delay: " << r.delay_summary.max_sink_delay << "\n";
         o << "  validation: valid=" << r.validation.valid
           << " non_hbt_cross_die_segments=" << r.validation.non_hbt_cross_die_segments
           << " invalid_hbt_segments=" << r.validation.invalid_hbt_segments
