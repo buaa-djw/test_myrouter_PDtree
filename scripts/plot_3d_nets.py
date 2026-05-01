@@ -9,7 +9,7 @@ def load_jsons(plot_dir: Path):
     return sorted(plot_dir.glob("*.json"))
 
 
-def draw_net(data, out_path: Path):
+def draw_net(data, out_path: Path, show_tree_hbt_node: bool):
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
     name = data.get("net_name", "unknown")
@@ -43,14 +43,17 @@ def draw_net(data, out_path: Path):
             ax.scatter(p["x"], p["y"], p["z"], marker="o", s=30, c="black", label="sink")
         elif t == "hbt":
             ax.scatter(p["x"], p["y"], p["z"], marker="^", s=80, c="green", label="HBT")
-        elif t == "hbt_node":
+        elif t == "hbt_node" and show_tree_hbt_node:
             has_hbt_node = True
             ax.scatter(p["x"], p["y"], p["z"], marker="s", s=40, c="orange", label="hbt_node")
         else:
             ax.scatter(p["x"], p["y"], p["z"], marker="x", s=20, c="gray")
 
     effective_valid = valid and not has_invalid_non_hbt
+    fail_reason = data.get("fail_reason", "")
     title = f"{name}\nvalidation={'OK' if effective_valid else 'INVALID'} status={status}"
+    if not effective_valid and fail_reason:
+        title += f"\nfail_reason={fail_reason}"
     ax.set_title(title)
 
     handles, labels = ax.get_legend_handles_labels()
@@ -75,6 +78,7 @@ def draw_net(data, out_path: Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
+    ap.add_argument("--show-tree-hbt-node", action="store_true")
     args = ap.parse_args()
 
     root = Path(args.root)
@@ -85,7 +89,7 @@ def main():
     for f in load_jsons(plot_dir):
         data = json.loads(f.read_text())
         suffix = "_INVALID" if not data.get("validation", {}).get("valid", True) else ""
-        draw_net(data, out_dir / f"{f.stem}{suffix}.png")
+        draw_net(data, out_dir / f"{f.stem}{suffix}.png", args.show_tree_hbt_node)
 
 
 if __name__ == "__main__":
