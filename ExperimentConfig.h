@@ -13,6 +13,8 @@ struct ExperimentConfig {
         std::string plot_dir = "plots";
         bool enable_plot_generation = true;
         bool dump_invalid_3d_nets = true;
+        bool dump_2d_plot_data = false;
+        bool dump_3d_plot_data = true;
     } output;
     struct PDTree {
         int max_nets = -1;
@@ -33,7 +35,12 @@ struct ExperimentConfig {
         double hbt_rc_scale = 1;
         double wire_r_scale = 1;
         double wire_c_scale = 1;
+        double top_wire_r_scale = 1;
+        double top_wire_c_scale = 1;
+        double bottom_wire_r_scale = 1;
+        double bottom_wire_c_scale = 1;
     } rc;
+    PDTreeRouter::TraditionalPDTreeParams traditional_pdtree;
     struct Debug {
         bool dump_candidate_cost = false;
         bool dump_per_net_detail = true;

@@ -73,6 +73,8 @@ bool ExperimentConfig::loadFromFile(const std::string& p, ExperimentConfig& c, s
         c.output.plot_data_dir = gs(out, "plot_data_dir", c.output.plot_data_dir);
         c.output.plot_dir = gs(out, "plot_dir", c.output.plot_dir);
         c.output.enable_plot_generation = gb(out, "enable_plot_generation", c.output.enable_plot_generation);
+        c.output.dump_2d_plot_data = gb(out, "dump_2d_plot_data", c.output.dump_2d_plot_data);
+        c.output.dump_3d_plot_data = gb(out, "dump_3d_plot_data", c.output.dump_3d_plot_data);
     }
     if (j.contains("debug")) {
         auto& d = j["debug"];
@@ -89,12 +91,21 @@ bool ExperimentConfig::loadFromFile(const std::string& p, ExperimentConfig& c, s
         c.rc.hbt_res = gd(r, "hbt_res", c.rc.hbt_res);
         c.rc.hbt_cap = gd(r, "hbt_cap", c.rc.hbt_cap);
         c.rc.hbt_rc_scale = gd(r, "hbt_rc_scale", c.rc.hbt_rc_scale);
+        c.rc.top_wire_r_scale = gd(r, "top_wire_r_scale", c.rc.top_wire_r_scale);
+        c.rc.top_wire_c_scale = gd(r, "top_wire_c_scale", c.rc.top_wire_c_scale);
+        c.rc.bottom_wire_r_scale = gd(r, "bottom_wire_r_scale", c.rc.bottom_wire_r_scale);
+        c.rc.bottom_wire_c_scale = gd(r, "bottom_wire_c_scale", c.rc.bottom_wire_c_scale);
+    }
+    if (j.contains("traditional_pdtree")) {
+        auto& t = j["traditional_pdtree"];
+        c.traditional_pdtree.alpha = gd(t, "alpha", c.traditional_pdtree.alpha);
+        c.traditional_pdtree.max_hbt_per_net = gi(t, "max_hbt_per_net", c.traditional_pdtree.max_hbt_per_net);
+        c.traditional_pdtree.max_hbt_per_path = gi(t, "max_hbt_per_path", c.traditional_pdtree.max_hbt_per_path);
     }
     return true;
 }
 
 bool ExperimentConfig::validate(std::string& e) const { if(input.common_lef.empty()||input.hbt_lef.empty()||input.upper_lef.empty()||input.bottom_lef.empty()||input.def_file.empty()){e="input path missing"; return false;} return true; }
-PDTreeRouter::Params ExperimentConfig::buildRouterParams() const { PDTreeRouter::Params p; p.source_res=rc.source_res; p.default_sink_cap=rc.default_sink_cap; p.hbt_res=rc.hbt_res*rc.hbt_rc_scale; p.hbt_cap=rc.hbt_cap*rc.hbt_rc_scale; p.max_candidate_parents=pd_tree.max_candidate_parents; p.max_candidate_hbts=pd_tree.max_candidate_hbts; p.beam_width_3d=pd_tree.beam_width_3d; p.beam_branch_candidates_3d=pd_tree.beam_branch_candidates_3d; p.max_local_hbt_candidates=pd_tree.max_local_hbt_candidates; p.max_hbt_nearest_k=pd_tree.max_hbt_nearest_k; p.verbose=pd_tree.verbose; p.enable_hbt_inner_node_optimization=false; p.dump_candidate_cost_debug=debug.dump_candidate_cost; p.report_cost=report_cost; return p; }
+PDTreeRouter::Params ExperimentConfig::buildRouterParams() const { PDTreeRouter::Params p; p.source_res=rc.source_res; p.default_sink_cap=rc.default_sink_cap; p.hbt_res=rc.hbt_res*rc.hbt_rc_scale; p.hbt_cap=rc.hbt_cap*rc.hbt_rc_scale; p.max_candidate_parents=pd_tree.max_candidate_parents; p.max_candidate_hbts=pd_tree.max_candidate_hbts; p.beam_width_3d=pd_tree.beam_width_3d; p.beam_branch_candidates_3d=pd_tree.beam_branch_candidates_3d; p.max_local_hbt_candidates=pd_tree.max_local_hbt_candidates; p.max_hbt_nearest_k=pd_tree.max_hbt_nearest_k; p.verbose=pd_tree.verbose; p.enable_hbt_inner_node_optimization=false; p.dump_candidate_cost_debug=debug.dump_candidate_cost; p.report_cost=report_cost; p.top_wire_r_scale = rc.top_wire_r_scale; p.top_wire_c_scale = rc.top_wire_c_scale; p.bottom_wire_r_scale = rc.bottom_wire_r_scale; p.bottom_wire_c_scale = rc.bottom_wire_c_scale; p.traditional_pdtree = traditional_pdtree; if (cost_mode == "traditional_pdtree") { p.cost_mode = PDTreeRouter::CostMode::kTraditionalPDTree; } else if (cost_mode == "baseline_rc_only") { p.cost_mode = PDTreeRouter::CostMode::kBaselineRcOnly; } else { p.cost_mode = PDTreeRouter::CostMode::kProposed; } return p; }
 std::string ExperimentConfig::dumpJsonString() const { json j; j["experiment_name"]=experiment_name; j["benchmark"]=benchmark; return j.dump(2); }
-
 

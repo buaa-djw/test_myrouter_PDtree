@@ -44,7 +44,7 @@ int computeWirelength(const NetRouteResult& result)
 
 void writeNetPlotData(const std::string& root_dir, const NetRouteResult& result)
 {
-    const std::filesystem::path out_dir = std::filesystem::path(root_dir) / "plot_data" / (result.is_3d ? "3d" : "2d");
+    const std::filesystem::path out_dir = std::filesystem::path(root_dir);
     std::filesystem::create_directories(out_dir);
 
     json j;
@@ -62,7 +62,25 @@ void writeNetPlotData(const std::string& root_dir, const NetRouteResult& result)
     j["route_hbt_path_penalty_delay"] = result.route_hbt_path_penalty_delay;
     j["route_stretch_penalty_delay"] = result.route_stretch_penalty_delay;
     j["wirelength"] = computeWirelength(result);
-    j["hbt_count"] = result.route_hbt_rc_delay > 0 ? 1 : 0;
+    j["cost_mode"] = "unknown";
+    int top_wl = 0;
+    int bottom_wl = 0;
+    int hbt_count = 0;
+    for (const RoutedSegment& s : result.segments) {
+        if (s.uses_hbt) {
+            ++hbt_count;
+            continue;
+        }
+        const int wl = std::abs(s.p1.x - s.p2.x) + std::abs(s.p1.y - s.p2.y);
+        if (s.p1.die == DieId::kTop) {
+            top_wl += wl;
+        } else if (s.p1.die == DieId::kBottom) {
+            bottom_wl += wl;
+        }
+    }
+    j["top_wirelength"] = top_wl;
+    j["bottom_wirelength"] = bottom_wl;
+    j["hbt_count"] = hbt_count;
     j["avg_sink_delay"] = result.delay_summary.avg_sink_delay;
     j["max_sink_delay"] = result.delay_summary.max_sink_delay;
     j["delay_ready"] = result.delay_summary.ready;
