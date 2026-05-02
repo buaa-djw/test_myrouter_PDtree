@@ -17,8 +17,8 @@
   "rc": {
     "source_res": 50,
     "default_sink_cap": 0.001,
-    "hbt_res": 5,
-    "hbt_cap": 0.001,
+    "hbt_res": 50,
+    "hbt_cap": 0.01,
     "hbt_rc_scale": 10.0
   },
   "report_cost": {
