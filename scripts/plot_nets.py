@@ -276,6 +276,10 @@ def process_root(root: Path, dpi: int, label_points: bool):
     # New structure: plot_data/2d and plot_data/3d
     files_2d = load_json_files(plot_data_2d)
     files_3d = load_json_files(plot_data_3d)
+    if not plot_data_2d.exists():
+        print(f"[plot_nets] skip missing directory: {plot_data_2d}")
+    if not plot_data_3d.exists():
+        print(f"[plot_nets] skip missing directory: {plot_data_3d}")
 
     if files_2d or files_3d:
         for js in files_2d:

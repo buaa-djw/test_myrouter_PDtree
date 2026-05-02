@@ -132,6 +132,16 @@ struct NetRouteResult
 class PDTreeRouter
 {
 public:
+    enum class CostMode {
+        kProposed = 0,
+        kBaselineRcOnly,
+        kTraditionalPDTree
+    };
+    struct TraditionalPDTreeParams {
+        double alpha = 0.5;
+        int max_hbt_per_net = 99;
+        int max_hbt_per_path = 99;
+    };
     struct RouteRunStats {
         int routed_success = 0;
         int routed_failed = 0;
@@ -172,6 +182,12 @@ public:
         // Core routing cost. EDCompute is intentionally not used for candidate
         // selection; it is only used for final report delay annotation.
         ReportCostParams report_cost;
+        CostMode cost_mode = CostMode::kProposed;
+        TraditionalPDTreeParams traditional_pdtree;
+        double top_wire_r_scale = 1.0;
+        double top_wire_c_scale = 1.0;
+        double bottom_wire_r_scale = 1.0;
+        double bottom_wire_c_scale = 1.0;
 
         // Deprecated legacy objective weights. They are kept only so older
         // configuration/main.cpp assignments do not break compilation. They are
@@ -253,6 +269,15 @@ private:
         double weighted_hbt_net_quad_penalty = 0.0;
         double weighted_hbt_path_penalty = 0.0;
         double weighted_stretch_penalty = 0.0;
+        double dij = 0.0;
+        double li = 0.0;
+        double traditional_total = 0.0;
+        std::string parent_segment_die = "unknown";
+        std::string attach_segment_die = "unknown";
+        double parent_segment_rc_res_per_um = 0.0;
+        double parent_segment_rc_cap_per_um = 0.0;
+        double attach_segment_rc_res_per_um = 0.0;
+        double attach_segment_rc_cap_per_um = 0.0;
     };
 
     struct CandidateScore {
@@ -458,3 +483,16 @@ private:
     std::vector<bool> hbt_used_;
     std::vector<std::string> hbt_owner_;
 };
+    EffectiveRC selectWireRCForSegment(DieId die,
+                                       const RoutedPoint& a,
+                                       const RoutedPoint& b) const;
+    bool isHorizontalPreferred(const RoutedPoint& a,
+                               const RoutedPoint& b) const;
+    CandidateScore scoreTraditionalCandidate(const Net& net,
+                                             const NetRouteResult& current_tree,
+                                             int parent_tree_index,
+                                             int sink_pin_index,
+                                             const RoutedPoint& attach_point,
+                                             bool introduces_hbt,
+                                             int hbt_id,
+                                             double extra_path_after_attach_dbu) const;

@@ -4,7 +4,7 @@
 
 void writeExperimentSummary(const std::string& path,
                             const ExperimentConfig& cfg,
-                            const RouterDB&,
+                            const RouterDB& db,
                             const std::vector<NetRouteResult>& results,
                             const std::string& st,
                             const std::string& et,
@@ -33,6 +33,21 @@ void writeExperimentSummary(const std::string& path,
     }
     o << "Experiment Info\n";
     o << "experiment_name=" << cfg.experiment_name << "\nbenchmark=" << cfg.benchmark << "\ncost_mode=" << cfg.cost_mode << "\nstart=" << st << "\nend=" << et << "\nruntime=" << rt << "\noutput_dir=" << cfg.output.output_dir << "\n\n";
+    o << "RC/Cost Config\n";
+    o << "default_sink_cap=" << cfg.rc.default_sink_cap << "\n";
+    o << "effective_top_unit_res=" << db.computeEffectiveTopUnitRes() << "\n";
+    o << "effective_top_unit_cap=" << db.computeEffectiveTopUnitCap() << "\n";
+    o << "effective_bottom_unit_res=" << db.computeEffectiveBottomUnitRes() << "\n";
+    o << "effective_bottom_unit_cap=" << db.computeEffectiveBottomUnitCap() << "\n";
+    o << "top_wire_r_scale=" << cfg.rc.top_wire_r_scale << "\n";
+    o << "top_wire_c_scale=" << cfg.rc.top_wire_c_scale << "\n";
+    o << "bottom_wire_r_scale=" << cfg.rc.bottom_wire_r_scale << "\n";
+    o << "bottom_wire_c_scale=" << cfg.rc.bottom_wire_c_scale << "\n";
+    o << "directional_rc_enabled=true\n";
+    o << "fallback_wire_res_per_um=" << cfg.report_cost.default_wire_res_per_um << "\n";
+    o << "fallback_wire_cap_per_um=" << cfg.report_cost.default_wire_cap_per_um << "\n";
+    o << "dump_2d_plot_data=" << cfg.output.dump_2d_plot_data << "\n";
+    o << "dump_3d_plot_data=" << cfg.output.dump_3d_plot_data << "\n\n";
     o << "Overall Metrics\n";
     o << "total_nets=" << results.size() << "\nrouted_success=" << routed_success << "\nrouted_failed=" << (static_cast<int>(results.size()) - routed_success) << "\nrouted_2d_nets=" << routed_2d << "\nrouted_3d_nets=" << routed_3d << "\ntopology_valid_nets=" << topology_valid << "\ndelay_ready_nets=" << delay_ready << "\n\n";
     o << "Aggregated Metrics\n";

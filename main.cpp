@@ -275,18 +275,31 @@ int main(int argc, char** argv)
 
     fs::create_directories(output_dir);
     fs::create_directories(plot_data_dir);
-    fs::create_directories(plot_data_2d_dir);
-    fs::create_directories(plot_data_3d_dir);
+    if (cfg.output.dump_2d_plot_data) {
+        fs::create_directories(plot_data_2d_dir);
+    }
+    if (cfg.output.dump_3d_plot_data) {
+        fs::create_directories(plot_data_3d_dir);
+    }
     fs::create_directories(plot_dir);
-    fs::create_directories(plot_2d_dir);
-    fs::create_directories(plot_3d_dir);
+    if (cfg.output.dump_2d_plot_data) {
+        fs::create_directories(plot_2d_dir);
+    }
+    if (cfg.output.dump_3d_plot_data) {
+        fs::create_directories(plot_3d_dir);
+    }
 
     // ------------------------------------------------------------
     // 7. Write plot data for all nets
     // ------------------------------------------------------------
     if (cfg.debug.dump_plot_data) {
         for (const auto& result : results) {
-            writeNetPlotData(output_dir.string(), result);
+            if (result.is_3d && cfg.output.dump_3d_plot_data) {
+                writeNetPlotData((plot_data_dir / "3d").string(), result);
+            }
+            if (!result.is_3d && cfg.output.dump_2d_plot_data) {
+                writeNetPlotData((plot_data_dir / "2d").string(), result);
+            }
         }
     }
 

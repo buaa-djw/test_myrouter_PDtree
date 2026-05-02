@@ -105,6 +105,19 @@ double totalWireLength(const std::vector<RoutedSegment>& segments)
     return wirelength;
 }
 
+const char* costModeToString(PDTreeRouter::CostMode mode)
+{
+    switch (mode) {
+    case PDTreeRouter::CostMode::kTraditionalPDTree:
+        return "traditional_pdtree";
+    case PDTreeRouter::CostMode::kBaselineRcOnly:
+        return "baseline_rc_only";
+    case PDTreeRouter::CostMode::kProposed:
+    default:
+        return "proposed";
+    }
+}
+
 }  // namespace
 
 PDTreeRouter::PDTreeRouter(const RouterDB& db,
@@ -1151,8 +1164,14 @@ PDTreeRouter::ReportCostBreakdown PDTreeRouter::computeReportPDCost(
     cost.sink_cap = sink_pin.has_input_cap
                         ? sink_pin.input_cap
                         : params_.default_sink_cap;
-    const EffectiveRC rc1 = db_.computeDirectionalRCForDie(parent.point.die, true);
-    const EffectiveRC rc2 = db_.computeDirectionalRCForDie(sink_point.die, true);
+    const EffectiveRC rc1 = selectWireRCForSegment(parent.point.die, parent.point, attach_point);
+    const EffectiveRC rc2 = selectWireRCForSegment(sink_point.die, attach_point, sink_point);
+    cost.parent_segment_die = dieToString(parent.point.die);
+    cost.attach_segment_die = dieToString(sink_point.die);
+    cost.parent_segment_rc_res_per_um = rc1.unit_res;
+    cost.parent_segment_rc_cap_per_um = rc1.unit_cap;
+    cost.attach_segment_rc_res_per_um = rc2.unit_res;
+    cost.attach_segment_rc_cap_per_um = rc2.unit_cap;
     cost.wire_res_parent_to_attach = rc1.unit_res * cost.parent_to_attach_um;
     cost.wire_cap_parent_to_attach = rc1.unit_cap * cost.parent_to_attach_um;
     cost.wire_res_attach_to_sink = rc2.unit_res * cost.attach_to_sink_um;
@@ -1227,6 +1246,9 @@ PDTreeRouter::CandidateScore PDTreeRouter::scoreAttachmentCandidate(
 {
     CandidateScore score;
     const bool introduces_hbt = extra_hbt_count > 0;
+    if (params_.cost_mode == CostMode::kTraditionalPDTree) {
+        return scoreTraditionalCandidate(net, current, parent_tree_index, sink_pin_index, sink_attach_point, introduces_hbt, hbt_id, extra_path_after_attach);
+    }
 
     score.cost = computeReportPDCost(
         net,
@@ -1252,6 +1274,7 @@ PDTreeRouter::CandidateScore PDTreeRouter::scoreAttachmentCandidate(
         std::ofstream ofs("candidate_cost_debug.csv", std::ios::app);
         if (ofs) {
             ofs << net.name << ','
+                << costModeToString(params_.cost_mode) << ','
                 << (net.is_3d ? "3D" : "2D") << ','
                 << sink_pin_index << ','
                 << parent_tree_index << ','
@@ -1271,6 +1294,12 @@ PDTreeRouter::CandidateScore PDTreeRouter::scoreAttachmentCandidate(
                 << score.cost.wire_cap_parent_to_attach << ','
                 << score.cost.wire_res_attach_to_sink << ','
                 << score.cost.wire_cap_attach_to_sink << ','
+                << score.cost.parent_segment_die << ','
+                << score.cost.attach_segment_die << ','
+                << score.cost.parent_segment_rc_res_per_um << ','
+                << score.cost.parent_segment_rc_cap_per_um << ','
+                << score.cost.attach_segment_rc_res_per_um << ','
+                << score.cost.attach_segment_rc_cap_per_um << ','
                 << score.cost.wire_delay << ','
                 << score.cost.parent_load_delay << ','
                 << score.cost.hbt_rc_delay << ','
@@ -1288,6 +1317,66 @@ PDTreeRouter::CandidateScore PDTreeRouter::scoreAttachmentCandidate(
         }
     }
 
+    return score;
+}
+
+EffectiveRC PDTreeRouter::selectWireRCForSegment(DieId die,
+                                                  const RoutedPoint& a,
+                                                  const RoutedPoint& b) const
+{
+    EffectiveRC rc = db_.computeDirectionalRCForDie(die, isHorizontalPreferred(a, b));
+    if (rc.unit_res <= 0.0 || rc.unit_cap <= 0.0) {
+        rc.unit_res = params_.report_cost.default_wire_res_per_um;
+        rc.unit_cap = params_.report_cost.default_wire_cap_per_um;
+    }
+    if (normalizeDie(die) == DieId::kTop) {
+        rc.unit_res *= params_.top_wire_r_scale;
+        rc.unit_cap *= params_.top_wire_c_scale;
+    } else {
+        rc.unit_res *= params_.bottom_wire_r_scale;
+        rc.unit_cap *= params_.bottom_wire_c_scale;
+    }
+    return rc;
+}
+
+bool PDTreeRouter::isHorizontalPreferred(const RoutedPoint& a, const RoutedPoint& b) const
+{
+    return std::abs(a.x - b.x) >= std::abs(a.y - b.y);
+}
+
+PDTreeRouter::CandidateScore PDTreeRouter::scoreTraditionalCandidate(
+    const Net& net,
+    const NetRouteResult& current_tree,
+    int parent_tree_index,
+    int sink_pin_index,
+    const RoutedPoint& attach_point,
+    bool introduces_hbt,
+    int hbt_id,
+    double extra_path_after_attach_dbu) const
+{
+    CandidateScore score;
+    if (parent_tree_index < 0 || parent_tree_index >= static_cast<int>(current_tree.tree_nodes.size())
+        || sink_pin_index < 0 || sink_pin_index >= static_cast<int>(net.pins.size())) {
+        return score;
+    }
+    const TreeNodeState& parent = current_tree.tree_nodes[parent_tree_index];
+    const int current_hbt = countHBTSegments(current_tree);
+    const int path_hbt_after = parent.hbt_count_from_root + (introduces_hbt ? 1 : 0);
+    if (introduces_hbt) {
+        if (hbt_id < 0 || current_hbt + 1 > params_.traditional_pdtree.max_hbt_per_net
+            || path_hbt_after > params_.traditional_pdtree.max_hbt_per_path) {
+            return score;
+        }
+    }
+    const double dij = static_cast<double>(manhattan(parent.point, attach_point)) + std::max(0.0, extra_path_after_attach_dbu);
+    const double li = static_cast<double>(parent.path_length_from_root);
+    const double total = dij + params_.traditional_pdtree.alpha * li;
+    score.valid = true;
+    score.objective = total;
+    score.cost.valid = true;
+    score.cost.dij = dij;
+    score.cost.li = li;
+    score.cost.traditional_total = total;
     return score;
 }
 
